@@ -601,6 +601,14 @@ class Protocol(ProtocolCase):
         self.assertIn("E3: in the journal but not registered", status)
         self.assertNotIn("nothing pending", status)
 
+    def test_status_counts_real_discrepancies_and_deflates_the_best_now(self):
+        self.make_best("E1", 0.5, 1)
+        self.write("research/toy/KB/KNOWLEDGE.md", "# Knowledge\n\n## Discrepancies: expected against actual\n"
+                   "kind: measurement · status: valid\n- (none yet)\n- <id> <stage>: template line\n")
+        status = self.p("status")
+        self.assertIn("Discrepancies recorded: 0", status)
+        self.assertIn("deflated Sharpe 1.000 after 1 trials", status)
+
     def test_a_best_that_ran_again_is_stale(self):
         self.make_best("E1", 0.5, 1)
         self.series("E1", 0.5, 1, again=True)

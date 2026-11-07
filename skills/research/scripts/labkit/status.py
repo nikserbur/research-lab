@@ -94,8 +94,11 @@ def summary(lab: pathlib.Path) -> list:
         st = next((e for e in reversed(ledger.find("stats", best.get("id"))) if e.get("run_seq") == best.get("run_seq")), {})
         latest = ledger.last("run_start", best.get("id")) or {}
         stale = latest.get("seq") != best.get("run_seq")
+        from .selection import dsr_now
+        trials = trial_count(ledger)
         numbers = (f", mean {st['mean']:.4g} per period (95% interval {st['lo']:.4g} to {st['hi']:.4g}), "
-                   f"deflated Sharpe {st['dsr']:.3f}") if st.get("sharpe") is not None else ""
+                   f"deflated Sharpe {dsr_now(st, trials):.3f} after {max(trials, st['trials'])} trials"
+                   if st.get("sharpe") is not None else "")
         lines.append(f"- Best: {best.get('id')}{numbers}" + (" (it has run again since: the best refers to an "
                                                              "earlier run and cannot go to the holdout)" if stale else ""))
         history = [e.get("id") for e in ledger.find("best")]
@@ -114,7 +117,7 @@ def summary(lab: pathlib.Path) -> list:
     discrepancies = 0
     if knowledge.exists():
         m = re.search(r"(?ms)^## Discrepancies.*?$(.*?)(?=^## |\Z)", knowledge.read_text(encoding="utf-8", errors="replace"))
-        discrepancies = len(re.findall(r"(?m)^\s*- (?!<)", m.group(1))) if m else 0
+        discrepancies = len(re.findall(r"(?m)^\s*- (?!<|\(none)", m.group(1))) if m else 0  # not the placeholders
     lines.append(f"- Discrepancies recorded: {discrepancies}")
     nexts = waiting(lab, ledger)
     if open_sim:
