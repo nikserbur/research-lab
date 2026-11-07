@@ -119,6 +119,12 @@ def summary(lab: pathlib.Path) -> list:
         m = re.search(r"(?ms)^## Discrepancies.*?$(.*?)(?=^## |\Z)", knowledge.read_text(encoding="utf-8", errors="replace"))
         discrepancies = len(re.findall(r"(?m)^\s*- (?!<|\(none)", m.group(1))) if m else 0  # not the placeholders
     lines.append(f"- Discrepancies recorded: {discrepancies}")
+    from .protocol import closed
+    shut = closed(ledger)
+    if shut:
+        lines.append(f"- Closed on {shut['ts'][:10]}: {shut['reason']}"
+                     + (f" ({shut['best']} not looked at on the holdout: {shut['without_look']})" if shut.get("without_look") else ""))
+        return lines + ["", "## Next", "- nothing: the research is closed; a new one starts from its knowledge"]
     nexts = waiting(lab, ledger)
     if open_sim:
         nexts.append("- prove the open simulation requirements before the next round")

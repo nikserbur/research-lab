@@ -798,6 +798,16 @@ class Protocol(ProtocolCase):
         self.write("research/toy/KB/expect/E2.md", "x")
         self.assertIn("registered E2", self.p("register", "E2"))
 
+    def test_the_stop_is_recorded_and_an_unlooked_best_needs_its_reason(self):
+        self.make_best("E1", 0.5, 1)
+        self.assertIn("--without-look", self.p("close", "--reason", "two rounds without a gain", expect=1))
+        self.assertIn("not looked at: the cost gate failed", self.p("close", "--reason", "two rounds without a gain",
+                                                                  "--without-look", "the cost gate failed"))
+        self.assertIn("Closed on", self.p("status"))
+        self.assertIn("the research is closed", self.series("E1", 0.5, 1, again=True, expect=1))
+        self.assertIn("reopened", self.p("close", "--reopen", "--reason", "closed by mistake"))
+        self.assertIn("E1: exit 0", self.series("E1", 0.5, 1, again=True))
+
     def test_exploration_counts_as_trials(self):
         self.assertIn("--n: the number of configurations", self.p("explore", "--n", "0", "--what", "x", expect=1))
         self.assertIn("60 trials so far", self.p("explore", "--n", "60", "--what", "R01 review re-runs"))

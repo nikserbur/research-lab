@@ -6,6 +6,45 @@ All notable changes to this project are documented here. The format follows
 with every release, or plugin users will not receive the update. Up to 0.3.1 the project was
 called autolearn.
 
+## [0.12.0] - 2026-11-08
+
+What the second end-to-end run (60 stocks from a hidden generator, see docs/e2e-run-2.md) and an
+independent evaluation against the generator found. The loop found every real mechanism and both
+planted traps, but the protocol chose the wrong candidate and stopped a real edge as "not validated".
+
+### Changed
+- `lab.py best` selects once over every eligible candidate (judge PASS, reviewer PASS, a LORD++
+  discovery, a deflated Sharpe of 0.95 after the trials so far): a model confidence set (Hansen,
+  Lunde and Nason) of their score series on shared periods, with one joint stationary bootstrap,
+  then the metric declared before the first run (`settings --select-by`, the mean score by
+  default). A different idea no longer has to beat the incumbent in a chain of pairwise tests;
+  `compare` is a diagnostic. `holdout open` refuses while candidates changed after the selection.
+- The deflated Sharpe's noise benchmark uses the variance of a Sharpe estimate under the null (1/n),
+  not the spread of the trials: one cost-sunk trial raised it to an annual 2.4-6.3. `best`, `holdout
+  open`, `stats` and `status` deflate again with the trial count of the day.
+- The environments are requirements for any domain: the template reads each one for trading, a
+  business process and a model; new S8 (fidelity against measurements of the real system); a
+  simulator change is a new environment version; the score per case lives in `scores.tsv`
+  (`daily.tsv` still read) with any column name.
+
+### Added
+- `lab.py explore --n N --what TEXT`: configurations judged outside `lab.py run` count as trials.
+- `settings --scenarios stress`: every criterion needs a clause on the simulator's `*_stress`
+  metrics, so a stress gate is judged by `judge` and at the holdout, never typed later.
+- The protocol is fixed per research (hash of `lab.py` and `labkit`); `lab.py upgrade --reason`.
+- `lab.py close --reason [--without-look]`: the stop in the ledger; `status` shows it.
+- `truncate --stages`; `rl-executor` mode `prove` for the environment proofs.
+- Reviewer: post-hoc checks are symmetric and placebo-calibrated, never gates; it records what it
+  judged with `explore`. Skill: every lead from the sources becomes a kept or cut row.
+
+### Fixed
+- `trace`: time order per stage of a stream; pending outcomes are skipped.
+- `check` accepts a row the critique cut; `status` no longer counts placeholders as discrepancies.
+- The holdout guard matched bare file names, so it refused `data/raw/prices.csv` because the
+  holdout file shared the name; it matches paths only.
+- `kb_rag.py verify` joins wrapped sentences and never takes the verified text, or a copy of it in
+  the KB, as its own evidence.
+
 ## [0.11.1] - 2026-11-07
 
 What an independent review of 0.11.0 found in the holdout lock.

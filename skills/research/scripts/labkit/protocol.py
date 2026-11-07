@@ -135,6 +135,40 @@ def cmd_upgrade(a) -> int:
     return 0
 
 
+def closed(ledger: Ledger):
+    """The entry that closed the research, or None (a later `reopen` undoes it)."""
+    last = None
+    for e in ledger.entries():
+        if e.get("kind") in ("close", "reopen"):
+            last = e
+    return last if last and last.get("kind") == "close" else None
+
+
+def cmd_close(a) -> int:
+    ledger = Ledger(a.lab)
+    if not (a.reason or "").strip():
+        return fail("close needs --reason: the stop rule that ended the research, in a sentence")
+    if a.reopen:
+        if not closed(ledger):
+            return fail("the research is open")
+        ledger.append("reopen", reason=a.reason.strip())
+        print(f"reopened: {a.reason.strip()}")
+        return 0
+    if closed(ledger):
+        return fail(f"closed already on {closed(ledger)['ts'][:10]}: {closed(ledger)['reason']}")
+    if holdout.look_open(ledger):
+        return fail("a holdout look is open; close it first")
+    best, looked = current_best(ledger), {e.get("id") for e in ledger.find("holdout_open")}
+    unlooked = best and best["id"] not in looked and not ledger.find("holdout_close")
+    if unlooked and not (a.without_look or "").strip():
+        return fail(f"{best['id']} is BEST and was never looked at on the holdout; closing now says it is not "
+                    "validated: give the reason with --without-look TEXT (it goes into the ledger)")
+    ledger.append("close", reason=a.reason.strip(), best=best["id"] if best else "",
+                  without_look=(a.without_look or "").strip() if unlooked else "")
+    print(f"closed: {a.reason.strip()}" + (f"; {best['id']} not looked at: {a.without_look.strip()}" if unlooked else ""))
+    return 0
+
+
 def cmd_explore(a) -> int:
     ledger = Ledger(a.lab)
     if not 1 <= a.n <= 100_000:
@@ -196,6 +230,8 @@ def cmd_register(a) -> int:
     if bad_id(a):
         return 1
     ledger, row = Ledger(a.lab), journal(a.lab).get(a.id)
+    if closed(ledger):
+        return fail(f"the research is closed ({closed(ledger)['reason']}); a new one starts from its knowledge")
     if protocol_problem(ledger):
         return fail(protocol_problem(ledger))
     if row is None:
@@ -236,6 +272,8 @@ def cmd_run(a) -> int:
         return fail("usage: lab.py run --lab DIR ID --code F [--code F ...] [--config F] [--data F] -- COMMAND ...; "
                     "--code names the files that make the candidate, so its hash means something")
     ledger = Ledger(a.lab)
+    if closed(ledger):
+        return fail(f"the research is closed ({closed(ledger)['reason']}); a new one starts from its knowledge")
     if protocol_problem(ledger):
         return fail(protocol_problem(ledger))
     problems = edits(a.lab, ledger, a.id)

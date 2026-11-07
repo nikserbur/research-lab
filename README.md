@@ -8,7 +8,7 @@ Claude runs research the way a careful lab does: it writes down what it expects 
 
 [![CI](https://github.com/nikserbur/research-lab/actions/workflows/ci.yml/badge.svg)](https://github.com/nikserbur/research-lab/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.11.1-informational)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.12.0-informational)](CHANGELOG.md)
 [![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-D97757)](#install)
 
 </div>
@@ -105,16 +105,19 @@ A research outlives the session that started it. `lab.py jobs` says which runs a
 Try a hundred variants of noise and the best one shows a Sharpe ratio of about 2.5 standard errors. So "best" is not a cell the agent fills in; `lab.py` grants it:
 
 ```text
-lab.py settings --lab research/mm --alpha 0.05   # value column, bootstrap block, error rate: fixed before run 1
+lab.py settings --lab research/mm --alpha 0.05 --scenarios stress   # fixed before run 1: score column, block,
+                                          # error rate, stress scenarios every criterion must hold under
+lab.py explore --lab research/mm --n 60 --what scripts/04_lags.py   # analyses outside runs count as trials
 lab.py stats --lab research/mm E7        # the record made when E7's run ended: deflated Sharpe after N trials,
                                           # block-bootstrap p and interval, periods needed, LORD++ decision
-lab.py compare --lab research/mm E7 E3   # same days, paired: better outside the interval? (recorded once)
 lab.py review --lab research/mm E7 --verdict PASS --round R04   # the reviewer's verdict, in the ledger
-lab.py best --lab research/mm E7         # PASS + reviewer PASS + discovery + DSR >= 0.95 + beats the best
+lab.py best --lab research/mm            # one selection over every eligible candidate: confidence set, then
+                                          # the declared metric (PASS + review + discovery + DSR >= 0.95)
 lab.py fdr --lab research/mm             # every run's test, LORD++ across the research, BY within a round
+lab.py close --lab research/mm --reason "two rounds without a gain"   # the stop, in the ledger
 ```
 
-Every run is tested as it ends, so a run nobody looked at still spends the error budget, and a statistic cannot be recomputed with friendlier settings. The noise benchmark is the best Sharpe that as many strategies without an edge would show (the variance of a Sharpe estimate under the null, not the spread of the trials, so one trial sunk by costs does not raise the bar for all), and `best` and `holdout open` deflate again with the trial count of the day. The bootstrap resamples blocks of days whose length comes from the data, so days that move together stay together; the p-value is a Student tail of the mean over its bootstrap standard error. LORD++ fixes each run's level when it ends, so a later result cannot rescue an earlier one. Only the current best may be looked at on the holdout. All of it is standard-library Python, checked against the papers and by simulation: on 250 days of noise it calls 3.3% of independent series significant at 5%, and 5.2% of series with a lag-one correlation of 0.5.
+Every run is tested as it ends, so a run nobody looked at still spends the error budget, and a statistic cannot be recomputed with friendlier settings. The noise benchmark is the best Sharpe that as many strategies without an edge would show (the variance of a Sharpe estimate under the null, not the spread of the trials, so one trial sunk by costs does not raise the bar for all), and `best` and `holdout open` deflate again with the trial count of the day. The bootstrap resamples blocks of days whose length comes from the data, so days that move together stay together; the p-value is a Student tail of the mean over its bootstrap standard error. LORD++ fixes each run's level when it ends, so a later result cannot rescue an earlier one. BEST is chosen once over every eligible candidate (a model confidence set of their scores, then a metric declared before the first run), so a different idea does not have to beat the incumbent in a chain of pairwise tests, and only the BEST may be looked at on the holdout. A research keeps the version of `lab.py` it started with; an update is taken explicitly (`lab.py upgrade`). All of it is standard-library Python, checked against the papers and by simulation: on 250 days of noise it calls 3.3% of independent series significant at 5%, and 5.2% of series with a lag-one correlation of 0.5.
 
 ### Simulation and verification environments
 
@@ -165,7 +168,7 @@ lab.py next --lab research/mm --k 3      # debug E9 / improve E7 / draft a new r
 lab.py worktree --lab research/mm add E12   # its own copy of the code, for a parallel run
 ```
 
-### One run, end to end
+### Two runs, end to end
 
 On synthetic daily data with a weak real edge (yesterday's order-flow imbalance) and a trap (an "opening gap" built from tomorrow's return), the session ran `/research` by the skill with the subagents:
 - The source scout found that daily imbalance predictability is not what the literature reports and traced the gap feature to the line that builds it from the next day.
@@ -175,6 +178,8 @@ On synthetic daily data with a weak real edge (yesterday's order-flow imbalance)
 - The pre-registered rule picked the sign rule, and its one look at a protected holdout passed (0.1496 per day over 199 days).
 
 It also found eleven things to fix, all fixed since: the scout's helper script read the holdout (now the files are locked until a look, and a hook refuses that), every candidate on the same code shared one hash, controls spent the first LORD++ positions, the truncation proof missed features computed ahead of the cut, and smaller ones in `status`, `next`, `trace` and `brief`.
+
+The second run was harder: 60 stocks over 9.5 years from a hidden generator with a real momentum effect, a reversal that lasts one session, regimes, bid-ask bounce in the closing prints, a look-ahead in the project's feature pipeline and a backtester whose default costs were too cheap. The loop found the look-ahead by rebuilding the features from cut prints, replaced the costs with published live-trading ones, found momentum and showed the reversal pays only as one-day timing of momentum's own trades. An independent evaluation that saw the generator then showed what the protocol got wrong ([docs/e2e-run-2.md](docs/e2e-run-2.md)): the deflated Sharpe's benchmark could be poisoned by one cost-sunk trial, "beat the current best" locked out a better, different candidate, about 60 analyses were not counted as trials, and the decisive cost gate lived in prose with mistranslated flags, so a real edge ended as "not validated". All of that is fixed in 0.12.0.
 
 ### Training a model
 
@@ -350,10 +355,11 @@ See [SECURITY.md](SECURITY.md) and [docs/hooks.md](docs/hooks.md).
 
 ## Status and limitations
 
-- **v0.11.1.** The hooks and scripts are covered by tests, and the whole loop has run end to end once (below). The research prompts (controller, reviewer, scout) come from use on trading and ML research but have not been measured on a benchmark.
+- **v0.12.0.** The hooks and scripts are covered by tests, and the whole loop has run end to end twice (above), the second time scored against the hidden truth by an independent evaluator. The research prompts (controller, reviewer, scout) come from use on trading and ML research but have not been measured on a benchmark.
 - **The environment checks are as good as the runs behind them.** `lab.py truncate` finds a look-ahead only across the cut you choose, so cut at several times; whether costs are realistic is the reviewer's judgement, not a script's.
 - **The ledger guards against drift, not against a determined forger.** Hashes catch edits to registered rows, expectations and the ledger itself; nothing stops someone from rewriting the whole ledger, or from running experiments outside `lab.py`, though `check` flags results that were never registered.
 - **The statistics assume a score per case.** The deflated Sharpe (mean over standard deviation of the score) and the bootstrap need `scores.tsv` (or `daily.tsv`), one row per day, week or test case; with fewer than 20 cases a run counts as a test with p = 1. LORD++ grows strict as runs pile up without a discovery, so a long research needs stronger evidence for each new result; that is the point, and it can make a real but small edge go unrecognised. Strongly persistent daily results (lag-one correlation near 0.9) are still called significant too often: 9% at 5% in simulation. LORD++'s guarantee assumes independent p-values, and runs on the same days are not. PBO by combinatorial cross-validation is not implemented.
+- **The trial count is as honest as its record.** Runs are counted by `lab.py`; analyses outside runs only when someone records them with `lab.py explore`. The selection and every test use one historical path; combinatorial purged cross-validation and the probability of backtest overfitting are not implemented, and LORD++ is not the dependence-robust e-LOND.
 - **research-lab does not bring a simulator.** It states the requirements and checks them; the simulator or pipeline is your project's.
 - **Claude Code only.** There are no adapters for Codex, Cursor or other hosts.
 - **Retrieval is strongest with an embedding model.** Without one (`kb_rag.py setup`) search is lexical plus hashed vectors: paraphrases are often missed and a question in another language than the notes finds nothing (0 of 5 in the benchmark). With one, such a question is still weak (2 of 5 in the top 3), so the output asks Claude to repeat it in the language of the notes. A search with a model takes 1-3 s and about 1 GB of memory on 10,000 chunks.

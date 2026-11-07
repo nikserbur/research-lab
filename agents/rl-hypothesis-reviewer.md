@@ -66,7 +66,13 @@ and trace samples, the processes that are running right now, the resource limits
    where it is earned and where it is lost; isolate the tails.
 7. **Significance.** Overlapping targets, correlated cases and correlated configs inflate t-stats
    and "N of N days": give an honest statistic (block by day, window or cycle; paired differences
-   against the baseline on the same cases).
+   against the baseline on the same cases). A check you choose after seeing the data is a conjecture,
+   not a finding: drop the best and the worst subperiods alike, try every phase, compare with a
+   placebo (the same check on shuffled dates or another phase), and say how often noise produces what
+   you see. A gate you propose (a cost stress, a borrow fee) goes into the criteria as a scenario with
+   exact flags, before the runs it judges; never judge a candidate by a gate written after its result.
+   Count the configurations you judge against outcomes (re-runs, phases, buckets, cost levels) and
+   record them: `lab.py explore --lab LAB_DIR --n <N> --what <your script>`.
 8. **Conclusions vs data.** Is every claim in `KNOWLEDGE.md` about these experiments backed by
    numbers? Where is a claim stronger than the data?
 9. **User rules.** Any proposal or result that breaks a hard rule or revives a rejected

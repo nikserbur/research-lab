@@ -33,6 +33,8 @@ case such as a day, a test cycle or an episode, and the score column):
     lab.py explore --lab DIR --n N --what TEXT       configurations judged outside lab.py run (recon, a reviewer's
                                                      re-runs): they count as trials for every later deflated Sharpe
     lab.py upgrade --lab DIR --reason TEXT           take a changed research-lab protocol into this research
+    lab.py close --lab DIR --reason TEXT [--without-look TEXT] [--reopen]
+                                                     the stop, in the ledger; an unlooked BEST needs its reason
 
 Where it stands (for a new session, or the user):
     lab.py jobs --lab DIR                            every run: running, interrupted, done or crashed
@@ -406,6 +408,10 @@ def main(argv=None) -> int:
     s.add_argument("--what", required=True)
     s.add_argument("--by", default="controller")
     with_lab(sub, "upgrade").add_argument("--reason", required=True)
+    s = with_lab(sub, "close")
+    s.add_argument("--reason", required=True)
+    s.add_argument("--without-look", help="why the BEST was not looked at on the holdout")
+    s.add_argument("--reopen", action="store_true")
     with_lab(sub, "tree")
     with_lab(sub, "next").add_argument("--k", type=int, default=3)
     s = with_lab(sub, "worktree")
@@ -459,6 +465,7 @@ def main(argv=None) -> int:
             "review": selection.cmd_review, "best": selection.cmd_best, "fdr": selection.cmd_fdr,
             "jobs": status.cmd_jobs, "status": status.cmd_status, "tree": tree.cmd_tree, "next": tree.cmd_next,
             "worktree": worktree.cmd_worktree, "explore": protocol.cmd_explore, "upgrade": protocol.cmd_upgrade,
+            "close": protocol.cmd_close,
             "env": cmd_env, "trace": cmd_trace, "truncate": cmd_truncate, "sample": cmd_sample,
             "repro": cmd_repro}[a.cmd](a)
 
