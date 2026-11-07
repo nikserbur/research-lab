@@ -299,6 +299,12 @@ class Protocol(ProtocolCase):
         self.assertIn("E1: FAIL  (2 trials", self.p("judge", "E1", expect=1))
         self.assertIn("1 registered, 2 runs (2 trials, 0 control runs), 1 PASS / 1 FAIL", self.p("check"))
 
+    def test_a_row_cut_by_the_critique_keeps_its_reason_without_an_error(self):
+        self.row("E2", "net_per_trade > 0", decision="CUT", result="not run: answered by the literature")
+        self.assertNotIn("E2", self.p("check"))
+        self.row("E3", "net_per_trade > 0", result="0.04 per trade")
+        self.assertIn("E3: has a result but was never registered", self.p("check", expect=1))
+
     def test_edits_after_registration_are_caught(self):
         self.p("register", "E1")
         self.write("research/toy/KB/expect/E1.md", "| Stage | Should do |\n|---|---|\n| signal | anything |\n")

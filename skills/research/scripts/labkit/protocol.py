@@ -434,8 +434,8 @@ def cmd_check(a) -> int:
         if start and bool(start.get("control")) != control:
             errors.append(f"{id}: ran as {'a control' if start.get('control') else 'a trial'} but its round is now "
                           f"{row.get('round', '').strip() or 'empty'}: a round is fixed once it runs; register a new id")
-        if id not in registered and row.get("result", "").strip():
-            errors.append(f"{id}: has a result but was never registered")
+        if id not in registered and row.get("result", "").strip() and "CUT" not in decision:
+            errors.append(f"{id}: has a result but was never registered")  # a CUT row keeps why it never ran
     warnings = [f"{e['id']}: started {e['ts']} (pid {e.get('pid')}), no end: running, or crashed" for e in unfinished(ledger)]
     errors += still_valid(a.lab, [id for id, row in rows.items() if "INVALID" in row.get("decision", "").upper()])
     knowledge = a.lab / "KB" / "KNOWLEDGE.md"
