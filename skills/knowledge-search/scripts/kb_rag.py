@@ -222,7 +222,7 @@ def cmd_search(store: Store, a: argparse.Namespace, emb, degraded: bool) -> int:
 def cmd_verify(store: Store, a: argparse.Namespace, emb, degraded: bool) -> int:
     text = a.answer if a.answer is not None else (read_text(a.file) if a.file else sys.stdin.read())
     index = fresh_index(store, a, emb, degraded)
-    report = verify(index, text, None if degraded else emb)
+    report = verify(index, text, None if degraded else emb, a.file)
     print(json.dumps(report, ensure_ascii=False, indent=1) if a.json else verify_text(report))
     return 0 if report["passed"] else 1
 

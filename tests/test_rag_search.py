@@ -479,9 +479,21 @@ class Faithfulness(RagCase):
         self.assertIn("FAITHFUL", self.run_engine("verify", "--file", str(draft)))
         self.assertIn("REVISE", self.run_engine("verify", stdin="Биткоины телепортируются квантовым модулем.\n", expect=1))
 
+    def test_a_brief_copied_into_the_base_is_no_evidence_for_itself(self):
+        brief = "- The quarterly churn model reached 0.91 AUC on the March cohort.\n"
+        (self.kb / "BRIEF_copy.md").write_text(brief, encoding="utf-8")
+        draft = self.kb.parent / "BRIEF.md"
+        draft.write_text(brief, encoding="utf-8")
+        self.assertIn("REVISE", self.run_engine("verify", "--file", str(draft), expect=1))
+
     def test_claims_skip_code_markup_and_empty_lines(self):
         claims = split_claims("# Heading words\n\n- First claim here.\n\n```\ncode here now\n```\n1. Second claim here. Third claim here.\nok\n")
         self.assertEqual(claims, ["Heading words", "First claim here.", "Second claim here.", "Third claim here."])
+
+    def test_a_sentence_wrapped_over_lines_is_one_claim(self):
+        claims = split_claims("## Result\nThe best candidate earns 3.26 bps a day\nafter costs over 2477 days.\n- An item that\n  wraps too.\n")
+        self.assertEqual(claims, ["The best candidate earns 3.26 bps a day after costs over 2477 days.",
+                                  "An item that wraps too."])
 
 
 class Reporting(RagCase):

@@ -22,12 +22,36 @@ SUPPORTED_AT, PARTIAL_AT = 0.55, 0.4
 PASS_SCORE = 0.8
 
 
+MARKER = re.compile(r"^\s*(?:[-*+]|\d+[.)]|#{1,6})\s+")
+
+
+def blocks(text: str) -> list:
+    """Paragraphs and list items with their wrapped lines joined: a sentence that a writer wrapped over
+    two lines is one claim, not two fragments. A line after a finished sentence, a heading and a table
+    row start anew."""
+    out, current = [], []
+    for line in text.splitlines():
+        alone = line.lstrip().startswith(("#", "|"))
+        ended = bool(current) and current[-1].endswith((".", "!", "?"))
+        if not line.strip() or MARKER.match(line) or alone or ended:
+            if current:
+                out.append(" ".join(current))
+                current = []
+        if line.strip():
+            current.append(MARKER.sub("", line).strip())
+        if alone and current:
+            out.append(" ".join(current))
+            current = []
+    if current:
+        out.append(" ".join(current))
+    return out
+
+
 def split_claims(answer: str) -> list:
     text = re.sub(r"```.*?```", " ", answer, flags=re.S)
     claims = []
-    for line in text.splitlines():
-        line = re.sub(r"^\s*(?:[-*+]|\d+[.)]|#{1,6})\s+", "", line).strip()
-        for sent in sentences(line):
+    for block in blocks(text):
+        for sent in sentences(block):
             bare = CITATION.sub(" ", sent)
             if len(words(bare)) >= 2 or NUMBER.search(bare):
                 claims.append(sent)
@@ -141,13 +165,14 @@ def _turned_down(bare: str, sents: list) -> str:
     return ""
 
 
-def check_claim(index: Index, claim: str, emb) -> dict:
-    """{claim, verdict: supported|partial|unsupported, why, evidence, coverage} for one claim."""
+def check_claim(index: Index, claim: str, emb, own=None) -> dict:
+    """{claim, verdict: supported|partial|unsupported, why, evidence, coverage} for one claim. `own` is a
+    test that tells the text under verification (or a copy of it) in the base, which is no evidence."""
     bare = CITATION.sub(" ", claim)
     cited = [(m.group(1), int(m.group(2))) for m in CITATION.finditer(claim)]
     query = Query(bare)
     qvec = query_vectors(emb)(bare) if emb is not None and index.has_vectors else None
-    rows = _evidence(index, bare, query, qvec, cited)
+    rows = [r for r in _evidence(index, bare, query, qvec, cited) if not (own and own(r[1]))]
     bad_citation = _citation_problem(index, cited)
     unknown = [t for t in query.ids if not index.df.get(t)]
     if not rows or unknown:
@@ -200,9 +225,23 @@ def check_claim(index: Index, claim: str, emb) -> dict:
     return {"claim": claim, "verdict": verdict, "why": why, "evidence": where, "coverage": round(level, 2)}
 
 
-def verify(index: Index, answer: str, emb=None) -> dict:
-    """{score, passed, claims}: score counts a partial claim as half; any unsupported claim fails the answer."""
-    claims = [check_claim(index, c, emb) for c in split_claims(answer)]
+def verify(index: Index, answer: str, emb=None, path=None) -> dict:
+    """{score, passed, claims}: score counts a partial claim as half; any unsupported claim fails the answer.
+    The answer's own file, and any file in the base with the same text, are left out of the evidence:
+    a brief copied into the KB would otherwise support itself."""
+    seen = {}
+
+    def own(file) -> bool:
+        if file not in seen:
+            try:
+                f = pathlib.Path(file).resolve()
+                seen[file] = (path is not None and f == pathlib.Path(path).resolve()) or \
+                    f.read_text(encoding="utf-8", errors="replace").strip() == answer.strip()
+            except OSError:
+                seen[file] = False
+        return seen[file]
+
+    claims = [check_claim(index, c, emb, own) for c in split_claims(answer)]
     if not claims:
         return {"score": 0.0, "passed": False, "claims": []}
     value = {"supported": 1.0, "partial": 0.5, "unsupported": 0.0}
