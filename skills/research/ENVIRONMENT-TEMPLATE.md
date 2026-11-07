@@ -18,16 +18,17 @@ answer) and "costs" as what each decision pays (fees, latency, compute, errors).
 
 | # | Requirement | Status | Evidence |
 |---|---|---|---|
-| S1 | Point in time: every decision uses only data stamped before it; the delay between data and decision is modelled (`lab.py truncate`: same decisions with the data cut at T) | | |
+| S1 | Point in time: every decision uses only data stamped before it; the delay between data and decision is modelled (`lab.py truncate`: same decisions with the raw data cut at T and the features rebuilt) | | |
 | S2 | Costs and fills are explicit and conservative: fees, taxes, spread, slippage, partial and rejected fills | | |
 | S3 | Reproducible: the same command, data, commit and seed give the same files (`lab.py repro`) | | |
 | S4 | Isolated: no live orders or accounts, no network, read-only source data, limits respected | | |
 | S5 | Controls hold: doing nothing gives zero, a known case gives its known numbers, a shuffled target gives no edge | | |
-| S6 | Decision trace: every decision, doing nothing included, with ts, stage, inputs looked at (with inputs_ts), action, reason, outcome (`lab.py trace`) | | |
+| S6 | Decision trace: every decision, doing nothing and the last period included, with ts, stage, inputs looked at (with inputs_ts), action, reason, outcome (`lab.py trace`) | | |
 | S7 | Units and conventions written down: price and size units, time zone, sign of returns, fill side | | |
 
 ## Verification environment
-- Holdout: `<dates or ids>`, sha256 `<...>`. Never used for training, selection, tuning or plots.
+- Holdout: `<dates or ids>`, sha256 `<...>`, protected with `lab.py holdout protect`. Never used for
+  training, selection, tuning or plots. Size it so the pass criterion can be met by a real effect.
 - Runs it: `rl-hypothesis-reviewer`, mode `verify`, fresh context, on a frozen candidate.
 - Look budget: `<1>` for the whole research, fixed by the first `lab.py holdout open`; every look is
   a ledger entry, and any failure spends the holdout.

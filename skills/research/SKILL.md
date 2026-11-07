@@ -100,17 +100,25 @@ Fill `ENVIRONMENT.md` from the template. **Simulation**: how a run works here (c
 commit, seeds, outputs) and requirements S1-S7. **Verification**: the holdout and its hash, who runs
 it, the look budget for the whole research (1 unless the user says otherwise), V1-V5. Use the
 project's own simulator or pipeline; write the missing pieces as numbered scripts only where it has
-none. Prove each requirement and write the proof in Evidence:
-- S1: run once with the full data and once with the data cut at a time T, then
-  `LAB truncate <full trace> <cut trace> --at T` (a self-reported `inputs_ts` is not proof);
+none. Prove each requirement on the controls, not on a candidate (a proof run of a candidate shows its
+numbers before it is registered), and write the proof in Evidence:
+- S1: rebuild the data with everything after a time T removed **before the features are computed**, run
+  once on it and once on the full data, then `LAB truncate <full trace> <cut trace> --at T`. Cutting rows
+  out of a file of ready-made features proves nothing: a feature built from the future keeps its value.
+  A self-reported `inputs_ts` is no proof either;
 - S3: `LAB repro --out <file> -- <command>`;
-- S5: the three control runs, registered and run like any experiment;
-- S6: `LAB trace results/<id>/trace.tsv`; every decision is a row, including deciding to do nothing.
+- S5: the controls (do nothing, a shuffled target, a known case), registered in round `0` and run like
+  any experiment. A round-0 experiment is a control: it spends no trial and no LORD++ position, needs no
+  review, and its decision is `CONTROL`;
+- S6: `LAB trace results/<id>/trace.tsv`; every decision is a row, including deciding to do nothing and the
+  last period, whose outcome is still unknown (a simulator that skips it hides a look-ahead at the cut).
 
 Fix the statistics and the budgets once, before the first run: `LAB settings --lab <folder> --column
 pnl --block auto --alpha 0.05 --run-timeout <seconds> --max-trials <N>` (the value column of
 `daily.tsv`, the bootstrap block, the error rate, the same time for every run so results compare, and
-the trials the whole research may spend). `LAB env KB/ENVIRONMENT.md --stage sim` lists what is unproven; a ❌ blocks round 1 unless the user
+the trials the whole research may spend). Protect the holdout files as soon as they exist: `LAB holdout --lab <folder> protect <path> ...`; a hook
+then refuses every tool that touches them until the reviewer opens a look, and every subagent is told
+their paths as never to be read. `LAB env KB/ENVIRONMENT.md --stage sim` lists what is unproven; a ❌ blocks round 1 unless the user
 accepts the risk (quote it in `PROGRAM.md`). V1-V5 are proven for a candidate before its holdout look
 (`--stage verify`).
 
@@ -133,7 +141,12 @@ Write `KB/rounds/R<NN>.md` from the template, one row per hypothesis in its plan
   stage what the system should look at, what it should do, where the trace or a metric shows it and
   the expected value; what must not happen; the neighbouring parts the change may move.
 - The pass criterion is machine-readable, metric names from `metrics.tsv` joined by `&`:
-  `net_per_trade > 0 & trades >= 300 & worst_day > -50`.
+  `net_per_day > 0.05 & days >= 150`. It judges the simulation and later the shorter holdout, so write it
+  in rates (per day, per trade), not totals that only the long sample can reach, and make it strict
+  enough that noise rarely passes it.
+- If several candidates may pass, write now how one is chosen (for example "compare E4 with E1 once,
+  prefer E4 unless E1 is BETTER"): `LAB best` lets a later candidate replace the best only when it is
+  better, so run that comparison before the first `best`.
 
 ## 4. Critique before compute
 Agent -> `rl-hypothesis-reviewer`, mode `critique`, round `R<NN>`: the round file, the expect files,
@@ -225,9 +238,10 @@ conflicts with the evidence or the next step costs far more than the program all
 3. Write `<folder>/BRIEF_<date>.md`, outside `KB/` (results, the best variant with its deflated
    Sharpe and interval, the number of trials and discoveries from `LAB fdr`, what is proven and what
    is not, next steps). `LAB brief --lab <folder> <brief>` must pass: every
-   number traces to a metrics file, the ledger, the journal or the program. Then
-   `RAG verify --root <folder>/KB --file <brief>` checks names, ids and claims against the KB; copy
-   the brief into `KB/` only after both pass. Promote what matters beyond this project by the
+   number traces to a metrics file, the ledger or the program. Then
+   `RAG verify --root <folder>/KB --file <brief>` checks claims about earlier knowledge against the KB
+   (the holdout's number is in the ledger, not the KB, by design, so verify does not find it); copy
+   the brief into `KB/` once `LAB brief` passes and every `[no]` of verify is explained. Promote what matters beyond this project by the
    knowledge-ingest rules: a topic page in the global KB, every fact pointing back to the research folder, and its
    topic-map block. The background mode then answers it in any project.
 

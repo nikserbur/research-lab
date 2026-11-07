@@ -9,6 +9,8 @@ Protocol (state lives in <lab>/LEDGER.jsonl, append-only and hash-chained; <lab>
     lab.py check --lab DIR                           edits after registration, KEEP without PASS, broken chain
     lab.py holdout --lab DIR open|close|status [ID] [--metrics F] [--budget N]
                                                      one look budget per research, opened before the run
+    lab.py holdout --lab DIR protect PATH ...        the holdout files; a hook refuses any tool that touches
+                                                     them until a look is open
     lab.py brief --lab DIR BRIEF.md                  every number in the brief traces to the record
 
 Selection (every run is tested as it ends on results/ID/daily.tsv: a `period` column and a value column):
@@ -111,8 +113,11 @@ def cmd_env(a) -> int:
 
 
 def expected_stages(path: pathlib.Path) -> list:
-    return [r["stage"].strip("`* ").lower() for r in tables.table_rows(path.read_text(encoding="utf-8"), ("stage",))
-            if r.get("stage", "").strip("`* ")]
+    """Stages the trace should show: rows whose "Shows in" cell names the trace (a row shown only in metrics,
+    such as the outcome of a decision, is not a trace stage)."""
+    rows = tables.table_rows(path.read_text(encoding="utf-8"), ("stage",))
+    return [r["stage"].strip("`* ").lower() for r in rows if r.get("stage", "").strip("`* ")
+            and ("trace" in r.get("shows in", "trace").lower())]
 
 
 def cmd_trace(a) -> int:
@@ -327,6 +332,11 @@ def with_lab(sub, name: str):
     return s
 
 
+def missing_files(a) -> list:
+    names = [getattr(a, k) for k in ("file", "full", "cut", "expect") if getattr(a, k, None)]
+    return [n for n in names if not pathlib.Path(n).is_file()]
+
+
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     command = []
@@ -343,8 +353,9 @@ def main(argv=None) -> int:
     s.add_argument("--again", action="store_true")
     with_lab(sub, "check")
     s = with_lab(sub, "holdout")
-    s.add_argument("action", choices=("open", "close", "status"))
+    s.add_argument("action", choices=("open", "close", "status", "protect"))
     s.add_argument("id", nargs="?")
+    s.add_argument("paths", nargs="*", help="protect: the holdout files")
     s.add_argument("--metrics")
     s.add_argument("--budget", type=int)
     s.add_argument("--by", default="rl-hypothesis-reviewer")
@@ -399,6 +410,9 @@ def main(argv=None) -> int:
     s.add_argument("--timeout", type=float)
     a = p.parse_args(argv)
     a.command = command
+    if a.cmd in ("env", "trace", "truncate", "sample") and missing_files(a):
+        print(f"! no such file: {', '.join(missing_files(a))}")
+        return 2
     return {"register": protocol.cmd_register, "run": protocol.cmd_run, "judge": protocol.cmd_judge,
             "check": protocol.cmd_check, "holdout": protocol.cmd_holdout, "brief": protocol.cmd_brief,
             "settings": selection.cmd_settings, "stats": selection.cmd_stats, "compare": selection.cmd_compare,

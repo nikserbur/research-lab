@@ -88,8 +88,15 @@ def live(lab: pathlib.Path, start: dict) -> bool:
 
 
 def trial_count(ledger: Ledger) -> int:
-    """Every start is a trial, interrupted ones included, and a sweep inside a run counts as its size."""
-    return len(ledger.find("run_start")) + sum(max(0, int(e.get("configs") or 1) - 1) for e in ledger.find("stats"))
+    """Every start is a trial, interrupted ones included, and a sweep inside a run counts as its size.
+    Controls (round 0: do nothing, a shuffled target, a known case) test the environment, not an idea,
+    and are not counted."""
+    return sum(1 for e in ledger.find("run_start") if not e.get("control")) + sum(
+        max(0, int(e.get("configs") or 1) - 1) for e in ledger.find("stats") if not e.get("control"))
+
+
+def is_control(lab: pathlib.Path, id: str) -> bool:
+    return journal(lab).get(id, {}).get("round", "").strip() == "0"
 
 
 def latest_run(ledger: Ledger, id: str):
@@ -188,6 +195,7 @@ def cmd_run(a) -> int:
             if not pathlib.Path(p).is_file():
                 return fail(f"{role} file {p} does not exist")
             hashes[f"{role}:{p}"] = sha256_file(pathlib.Path(p))
+    hashes["command"] = sha256_bytes(json.dumps(a.command).encode("utf-8"))  # arguments are part of the candidate
     candidate = sha256_bytes(json.dumps(hashes, sort_keys=True).encode("utf-8"))[:16]
     out = a.lab / "results" / a.id
     (out / "code").mkdir(parents=True, exist_ok=True)
@@ -201,13 +209,13 @@ def cmd_run(a) -> int:
     start = time.time()
 
     def within_budget(led: Ledger) -> dict:  # checked under the ledger's lock, so parallel runs cannot both slip in
-        if settings["max_trials"] and trial_count(led) >= settings["max_trials"]:
+        if settings["max_trials"] and not is_control(a.lab, a.id) and trial_count(led) >= settings["max_trials"]:
             raise BudgetSpent(settings["max_trials"])
         return {}
 
     try:
         entry = ledger.append("run_start", compute=within_budget, id=a.id, command=a.command, candidate=candidate,
-                              hashes=hashes, pid=os.getpid())
+                              hashes=hashes, pid=os.getpid(), control=is_control(a.lab, a.id))
     except BudgetSpent as e:
         return fail(f"the research's budget of {e} trials is spent: stop, write the brief, or start a new research")
     beat, stop = heartbeat(a.lab, entry), threading.Event()
@@ -401,7 +409,7 @@ def cmd_check(a) -> int:
         decision = row.get("decision", "").upper()
         if "BEST" in decision:
             best.append(id)
-        if "KEEP" in decision or "BEST" in decision:
+        if ("KEEP" in decision or "BEST" in decision) and row.get("round", "").strip() != "0":
             if not judged_latest(ledger, id):
                 errors.append(f"{id}: marked {row.get('decision')} without a PASS from lab.py judge on its latest run")
             if not reviewed(ledger, id):
@@ -436,9 +444,20 @@ def cmd_check(a) -> int:
 
 
 def cmd_holdout(a) -> int:
+    ledger = Ledger(a.lab)
+    if a.action == "protect":  # the research_guard hook keeps every tool away from these until a look is open
+        given = ([a.id] if a.id else []) + list(a.paths)
+        if not given:
+            return fail("protect needs the holdout files: lab.py holdout --lab DIR protect PATH ...")
+        paths = [str(pathlib.Path(p).resolve()) for p in given]
+        missing = [p for p in paths if not pathlib.Path(p).exists()]
+        if missing:
+            return fail(f"no such file: {', '.join(missing)}")
+        ledger.append("protect", paths=paths)
+        print(f"protected: {', '.join(paths)}; tools that touch them are refused until a look is open")
+        return 0
     if bad_id(a):
         return 1
-    ledger = Ledger(a.lab)
     opens, closes = ledger.find("holdout_open"), ledger.find("holdout_close")
     budget = opens[0]["budget"] if opens else (a.budget or 1)
     if a.action == "status":
@@ -447,6 +466,8 @@ def cmd_holdout(a) -> int:
             print(f"  look {c['look']}: {c['id']} {c['verdict']} {json.dumps(c['metrics'])}")
         if len(opens) > len(closes):
             print(f"  look {len(opens)}: {opens[-1]['id']} open")
+        guarded = sorted({p for e in ledger.find("protect") for p in e.get("paths", [])})
+        print("protected: " + (", ".join(guarded) if guarded else "nothing yet (lab.py holdout protect PATH)"))
         return 0
     if not a.id:
         return fail(f"holdout {a.action} needs an experiment id")
@@ -539,7 +560,8 @@ def cmd_brief(a) -> int:
     path = pathlib.Path(a.file)
     values, missing, count = known_numbers(a.lab, Ledger(a.lab)), [], 0
     for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-        for token in BRIEF_NUMBER.findall(THOUSANDS.sub("", line)):
+        line = re.sub(r"\b(90|95|99)% (?=(?:confidence|interval|block-bootstrap))", "", THOUSANDS.sub("", line))
+        for token in BRIEF_NUMBER.findall(line):
             if "." not in token and "%" not in token and 1900 <= int(token.lstrip("+-")) <= 2100:
                 continue  # a year
             count += 1

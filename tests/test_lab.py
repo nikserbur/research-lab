@@ -93,6 +93,18 @@ class Trace(LabCase):
         out = self.lab("trace", str(self.dir / "t.tsv"), "--min-delay", "0.5", expect=1)
         self.assertIn("less than 0.5 s before the decision", out)
 
+    def test_a_missing_file_is_a_message_not_a_traceback(self):
+        out = self.lab("truncate", str(self.dir / "a.tsv"), str(self.dir / "b.tsv"), "--at", "1", expect=2)
+        self.assertIn("no such file", out)
+        self.assertIn("no such file", self.lab("trace", str(self.dir / "t.tsv"), expect=2))
+
+    def test_an_outcome_shown_in_metrics_is_not_a_missing_stage(self):
+        expect = ("| Stage | Should do | Shows in |\n|---|---|---|\n| decision | go long | trace action |\n"
+                  "| outcome | earn | metrics net_per_day |\n")
+        out = self.lab("trace", self.write("t.tsv", "ts\tstage\taction\tinputs\n1\tdecision\tlong\tx\n"),
+                       "--expect", self.write("E.md", expect))
+        self.assertNotIn("stage 'outcome'", out)
+
     def test_missing_columns_and_blind_decisions(self):
         out = self.lab("trace", self.write("t.tsv", "ts\tstage\n1\tsignal\n"), expect=1)
         self.assertIn("no action column", out)
@@ -523,6 +535,39 @@ class Protocol(ProtocolCase):
     def test_a_long_knowledge_file_is_flagged(self):
         self.write("research/toy/KB/KNOWLEDGE.md", "# Knowledge\n\n" + "## Note\n- x\n" * 4000)
         self.assertIn("move older sections to KB/archive/", self.p("check"))
+
+    def test_holdout_files_are_protected_in_the_ledger(self):
+        self.write("holdout_b.csv", "x")
+        out = self.p("holdout", "protect", str(self.dir / "holdout_b.csv"))
+        self.assertIn("protected:", out)
+        self.assertIn("holdout_b.csv", self.p("holdout", "status"))
+        self.assertIn("no such file", self.p("holdout", "protect", str(self.dir / "nope.csv"), expect=1))
+
+    def test_controls_spend_no_error_budget_and_no_trial(self):
+        self.row("C0", "net_per_day < 1")
+        path = self.labdir / "KB" / "EXPERIMENTS.tsv"
+        path.write_text(path.read_text().replace("C0\t1\t", "C0\t0\t"))
+        self.write("research/toy/KB/expect/C0.md", "x")
+        self.p("register", "C0")
+        out = self.series("C0", 0.0, 3)
+        self.assertIn("a control", out)
+        self.p("register", "E1")
+        out = self.series("E1", 0.5, 1)
+        self.assertIn("1 trials so far", out)
+        self.assertIn("level 1.52e-02", out)  # the first LORD++ position, not the second
+        self.assertNotIn("C0", self.p("fdr"))
+
+    def test_the_candidate_includes_the_command(self):
+        self.p("register", "E1")
+        self.series("E1", 0.5, 1)
+        self.series("E1", 0.5, 2, again=True)
+        starts = [e for e in map(json.loads, (self.labdir / "LEDGER.jsonl").read_text().splitlines()) if e["kind"] == "run_start"]
+        self.assertNotEqual(starts[0]["candidate"], starts[1]["candidate"])
+
+    def test_a_confidence_level_is_not_a_result(self):
+        self.passed()
+        brief = self.write("research/toy/BRIEF.md", "E1 earned 0.039 per trade (95% interval shown in the status).\n")
+        self.assertIn("1 of 1 numbers trace", self.p("brief", brief))
 
     def test_the_brief_traces_every_number_to_the_record(self):
         self.passed()

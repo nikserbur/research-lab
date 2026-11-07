@@ -25,6 +25,7 @@ and the [research skill](../skills/research/SKILL.md) itself.
 |---|---|---|
 | `session_brief.py` | SessionStart | Injects pointers and counts (< 700 chars), never content; seeds the data directory in plugin mode |
 | `kb_autoindex.py` | PostToolUse (Write / Edit) | A write to the knowledge base or any `KB/` folder starts a background re-embedding of the changed files; never blocks |
+| `research_guard.py` | PreToolUse (Read, Grep, Glob, Bash, edits) | Refuses any tool that touches a protected holdout file until a look is open |
 | `check_secrets.py` | PreToolUse (Bash) | Denies `git commit` when staged lines look like keys or tokens |
 
 ## Scripts (deterministic work stays out of the context window)

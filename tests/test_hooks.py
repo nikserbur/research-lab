@@ -173,6 +173,45 @@ class SessionBrief(HookCase):
         self.assertEqual(self.run_hook("session_brief.py", {"cwd": str(self.repo)}), "")
 
 
+class ResearchGuard(HookCase):
+    def setUp(self):
+        super().setUp()
+        self.lab = self.repo / "research" / "mm"
+        self.lab.mkdir(parents=True)
+        (self.repo / "data").mkdir()
+        self.holdout = self.repo / "data" / "holdout_b.csv"
+        self.holdout.write_text("date,ret\n")
+        self.ledger([{"kind": "protect", "paths": [str(self.holdout.resolve())]}])
+
+    def ledger(self, entries):
+        (self.lab / "LEDGER.jsonl").write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+
+    def call(self, tool, **args):
+        out = self.run_hook("research_guard.py", {"tool_name": tool, "tool_input": args, "cwd": str(self.repo)})
+        return out["hookSpecificOutput"]["permissionDecision"] if isinstance(out, dict) else "allow"
+
+    def test_reads_searches_and_commands_on_the_holdout_are_refused(self):
+        self.assertEqual(self.call("Read", file_path=str(self.holdout)), "deny")
+        self.assertEqual(self.call("Read", file_path="data/holdout_b.csv"), "deny")
+        self.assertEqual(self.call("Grep", pattern="ret", path=str(self.repo / "data")), "deny")
+        self.assertEqual(self.call("Bash", command="python3 check.py data/holdout_b.csv"), "deny")
+        self.assertEqual(self.call("Edit", file_path=str(self.holdout), old_string="a", new_string="b"), "deny")
+
+    def test_other_files_and_an_open_look_pass(self):
+        self.assertEqual(self.call("Read", file_path=str(self.repo / "data" / "sim.csv")), "allow")
+        self.assertEqual(self.call("Bash", command="python3 tools/sim.py --data data/sim.csv"), "allow")
+        self.assertEqual(self.call("Bash", command="cat data/holdout_b.csv.bak"), "allow")
+        self.ledger([{"kind": "protect", "paths": [str(self.holdout.resolve())]}, {"kind": "holdout_open", "id": "E4"}])
+        self.assertEqual(self.call("Read", file_path=str(self.holdout)), "allow")
+        self.ledger([{"kind": "protect", "paths": [str(self.holdout.resolve())]}, {"kind": "holdout_open", "id": "E4"},
+                     {"kind": "holdout_close", "id": "E4"}])
+        self.assertEqual(self.call("Read", file_path=str(self.holdout)), "deny")
+
+    def test_silent_without_research_or_on_a_broken_ledger(self):
+        (self.lab / "LEDGER.jsonl").write_text("not json\n[1]\n")
+        self.assertEqual(self.call("Read", file_path=str(self.holdout)), "allow")
+
+
 class KbAutoindex(HookCase):
     def write_payload(self, path):
         return {"tool_name": "Write", "tool_input": {"file_path": str(path)}}

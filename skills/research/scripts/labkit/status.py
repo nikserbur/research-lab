@@ -49,12 +49,15 @@ def waiting(lab: pathlib.Path, ledger: Ledger) -> list:
             judged = ledger.last("judge", id)
             if not judged or judged.get("run_seq") != job["seq"]:
                 out.append(f"- {id}: {job['state']}, not judged yet: collect it (trace) and run `lab.py judge`")
-            elif judged.get("verdict") == "PASS" and not any(r.get("run_seq") == job["seq"] for r in ledger.find("review", id)):
+            elif judged.get("verdict") == "PASS" and rows.get(id, {}).get("round", "").strip() != "0" \
+                    and not any(r.get("run_seq") == job["seq"] for r in ledger.find("review", id)):
                 out.append(f"- {id}: judged PASS, awaiting the reviewer's verdict")
     for id in sorted(i for i in registered - set(latest) if isinstance(i, str)):
         out.append(f"- {id}: registered, never run")
+    settled = ("CUT", "DISCARD", "INVALID", "CONTROL", "KEEP", "BEST")
     for id, row in rows.items():
-        if id not in registered and not row.get("result", "").strip():
+        decided = any(w in (row.get("decision") or "").upper() for w in settled)
+        if id not in registered and not row.get("result", "").strip() and not decided:
             out.append(f"- {id}: in the journal but not registered (`lab.py register`)")
     return out
 

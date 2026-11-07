@@ -76,10 +76,13 @@ def record_test(lab: pathlib.Path, ledger: Ledger, id: str, run: dict, exit_code
     row = journal(lab).get(id, {})
 
     def compute(led: Ledger) -> dict:
-        settings, prior = research_settings(led), led.find("stats")
+        settings = research_settings(led)
+        control = bool(run.get("control"))
+        prior = [e for e in led.find("stats") if not e.get("control")]  # controls test the environment, not ideas
         trials = trial_count(led) + configs - 1  # this run's own sweep is not in the record yet
         fields = {"id": id, "run_seq": run["seq"], "candidate": run["candidate"], "round": row.get("round", ""),
-                  "configs": configs, "trials": trials, **{f"setting_{k}": v for k, v in settings.items()}}
+                  "configs": configs, "trials": trials, "control": control,
+                  **{f"setting_{k}": v for k, v in settings.items()}}
         try:
             if exit_code == 124:
                 raise ValueError("the run was stopped by the research's time budget")
@@ -109,8 +112,11 @@ def record_test(lab: pathlib.Path, ledger: Ledger, id: str, run: dict, exit_code
                           dsr=stats.psr(sr, benchmark, n, skew, kurt), block=block, p=boot["p"], lo=boot["lo"],
                           hi=boot["hi"], periods_for_dsr95=n95 if math.isfinite(n95) else None,
                           daily_sha=sha256_file(path))
-        level, found = stats.lord_levels([e["p"] for e in prior] + [fields["p"]], settings["alpha"])[-1]
-        fields.update(lord_level=level, discovery=found)
+        if control:  # outside the error budget: a control spends no LORD++ position
+            fields.update(lord_level=0.0, discovery=False)
+        else:
+            level, found = stats.lord_levels([e["p"] for e in prior] + [fields["p"]], settings["alpha"])[-1]
+            fields.update(lord_level=level, discovery=found)
         return fields
 
     return ledger.append("stats", compute=compute)
@@ -123,8 +129,9 @@ def describe(e: dict) -> list:
              f"block {e['block']:.1f}), Sharpe {e['sharpe']:.3f} per period",
              f"  {e['trials']} trials so far: noise alone would show a best Sharpe of {e['sharpe_noise_best']:.3f}; "
              f"deflated Sharpe {e['dsr']:.3f} (against 0: {e['psr']:.3f})",
-             f"  p(mean > 0) {e['p']:.2e}; LORD++ level {e['lord_level']:.2e}: "
-             f"{'a discovery' if e['discovery'] else 'not a discovery'}"]
+             (f"  a control: it tests the environment and spends no LORD++ position" if e.get("control") else
+              f"  p(mean > 0) {e['p']:.2e}; LORD++ level {e['lord_level']:.2e}: "
+              f"{'a discovery' if e['discovery'] else 'not a discovery'}")]
     if e["dsr"] < MIN_DSR:
         need = e.get("periods_for_dsr95")
         lines.append(f"  deflated Sharpe below {MIN_DSR}: " + (f"about {math.ceil(need)} periods would be needed "
@@ -267,7 +274,8 @@ def cmd_best(a) -> int:
 
 def cmd_fdr(a) -> int:
     ledger = Ledger(a.lab)
-    tests, alpha = ledger.find("stats"), research_settings(ledger)["alpha"]
+    tests = [e for e in ledger.find("stats") if not e.get("control")]
+    alpha = research_settings(ledger)["alpha"]
     if not tests:
         print("no tested runs yet")
         return 0

@@ -6,6 +6,38 @@ All notable changes to this project are documented here. The format follows
 with every release, or plugin users will not receive the update. Up to 0.3.1 the project was
 called autolearn.
 
+## [0.10.0] - 2026-11-07
+
+What a first end-to-end `/research` run found. The session ran the whole loop by the skill with the
+subagents (scout, executors, reviewer in critique, review and verify) on synthetic data with a weak
+real edge and a look-ahead trap. The loop caught the trap and confirmed the edge on a holdout; it also
+showed eleven things to fix.
+
+### Added
+- `hooks/research_guard.py` and `lab.py holdout protect PATH ...`: once a research protects its holdout
+  files, every Read, Grep, Glob, Bash, edit or write that touches them is refused until the reviewer
+  opens a look. In the run the source scout's helper script read the holdout; instructions alone did
+  not keep it out.
+
+### Fixed
+- The candidate hash now includes the command, so experiments that differ only in their arguments are
+  different candidates (all of them shared one hash, which collapsed the deflated Sharpe's pool and
+  made "the candidate did not change" meaningless).
+- Controls (round 0) spend no trial and no LORD++ position, need no review, take the decision
+  CONTROL, and are not ideas for `next` (they took the first two, most generous LORD++ positions).
+- `status` no longer lists cut or decided rows as unregistered, nor controls as awaiting review.
+- `truncate`, `trace`, `env` and `sample` report a missing file instead of a traceback.
+- `trace --expect` checks only stages whose "Shows in" names the trace; an outcome shown in the
+  metrics is not a missing stage.
+- `brief` does not take a confidence level ("95% interval") for a result.
+
+### Changed
+- The skill: S1 is proven by rebuilding the data up to the cut before the features are computed (cutting
+  rows out of a file of ready-made features cannot reveal a feature built from the future); S6 asks for
+  the last period's decision too; proofs run on controls, not candidates; pass criteria are rates that
+  the shorter holdout can meet; a selection rule among passing candidates is written before the first
+  `best`; `RAG verify` on a brief is for claims about earlier knowledge.
+
 ## [0.9.0] - 2026-11-07
 
 Phase 5 of the [v2 architecture](docs/architecture-v2.md), the last: a search instead of a hill climb.

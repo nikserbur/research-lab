@@ -30,7 +30,8 @@ def nodes(lab, ledger: Ledger) -> dict:
             continue
         parent = ((reg.get("fields") or {}).get("parent", "") or "").strip()
         out[id] = {"id": id, "parent": parent, "children": [], "state": "not run", "test": None,
-                   "decision": (rows.get(id, {}).get("decision") or "").strip().upper(), "seq": reg.get("seq")}
+                   "decision": (rows.get(id, {}).get("decision") or "").strip().upper(), "seq": reg.get("seq"),
+                   "control": rows.get(id, {}).get("round", "").strip() == "0"}
     latest = {}
     for job in runs(ledger):
         latest[job["start"]["id"]] = job
@@ -59,7 +60,7 @@ def dropped(node) -> bool:
 
 
 def usable(node) -> bool:
-    return node["state"] == "done" and lower(node) is not None and not dropped(node)
+    return node["state"] == "done" and lower(node) is not None and not dropped(node) and not node["control"]
 
 
 def tainted(tree: dict, id: str) -> bool:
@@ -170,9 +171,9 @@ def suggestions(lab, ledger: Ledger, k: int) -> list:
         open_kids = sum(1 for c in n["children"] if tree[c]["state"] in ("not run", "running"))
         out.append((f"improve {n['id']}", f"lower bound {lower(n):.4g}, {len(n['children'])} children"
                     + (f" ({open_kids} not finished)" if open_kids else "")))
-    roots = {root_of(tree, id) for id in tree}
+    roots = {root_of(tree, id) for id in tree if not tree[id]["control"]}  # a control is not an idea
     last_best = max((e["seq"] for e in ledger.find("best")), default=0)
-    last_root = max((n["seq"] or 0 for n in tree.values() if n["parent"] not in tree), default=0)
+    last_root = max((n["seq"] or 0 for n in tree.values() if n["parent"] not in tree and not n["control"]), default=0)
     since = sum(1 for s in ledger.find("run_start") if s["seq"] > max(last_best, last_root))
     if len(roots) < MIN_ROOTS:
         out.insert(0, ("draft a new root", f"only {len(roots)} idea{'s' if len(roots) != 1 else ''} so far; "

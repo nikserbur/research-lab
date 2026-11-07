@@ -8,9 +8,10 @@ machinery: they run on their events whatever Claude decides.
 |---|---|---|
 | `session_brief.py` | SessionStart (`startup\|resume\|clear\|compact`) | Adds a pointers-only brief: how many topics the knowledge base has, a missing project page for this repo, and (weekly) an offer to install an embedding model while RAG runs on the hashing fallback. With `--seed` (plugin mode) it creates the data directory on the first session, and moves `~/.claude/autolearn` there once if that exists (the project's old name) |
 | `kb_autoindex.py` | PostToolUse, matcher `Write\|Edit\|MultiEdit` | A write to `.md` / `.tsv` / `.txt` under the knowledge base or any folder named `KB` (a research KB) starts `kb_rag.py index` detached in the background, so the store (vectors, entity graph, context) is current without calling a skill; only changed chunks are embedded again, and a busy indexer picks the change up from a note. The indexer itself may load an embedding model if one is installed (the only exception to "no network": a first model download). `RESEARCH_LAB_PYTHON` picks the interpreter that has the model; `RESEARCH_LAB_AUTOINDEX=0` disables, `=sync` waits (tests) |
+| `research_guard.py` | PreToolUse, matcher `Read\|Grep\|Glob\|Bash\|Edit\|Write\|MultiEdit\|NotebookEdit` | Reads the ledgers of the project's research folders and refuses any call that reads, searches, copies or edits a file a research protected with `lab.py holdout protect`, unless that research has a holdout look open. Added after a source scout's helper script read a holdout in an end-to-end run; instructions alone did not keep it out |
 | `check_secrets.py` | PreToolUse, matcher `Bash` | For commands containing `git ... commit`: scans added lines of `git diff --cached` in each target repo (handles `cd X &&` and `git -C X`) for AWS keys, private keys, GitHub / Slack / Anthropic / OpenAI / Google keys and password-like literals; denies the call with the list |
 
-The plugin registers them in `hooks/hooks.json`; `install.sh` adds the same three to
+The plugin registers them in `hooks/hooks.json`; `install.sh` adds the same four to
 `~/.claude/settings.json` (idempotent, backed up) and `uninstall.sh` removes them.
 
 ## Environment variables

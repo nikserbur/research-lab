@@ -8,7 +8,7 @@ Claude runs research the way a careful lab does: it writes down what it expects 
 
 [![CI](https://github.com/nikserbur/research-lab/actions/workflows/ci.yml/badge.svg)](https://github.com/nikserbur/research-lab/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.9.0-informational)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.10.0-informational)](CHANGELOG.md)
 [![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-D97757)](#install)
 
 </div>
@@ -53,6 +53,7 @@ flowchart LR
     H1[SessionStart: brief with pointers]
     H2[PostToolUse Write/Edit: embed KB writes]
     H3[PreToolUse Bash: secret guard]
+    H4[PreToolUse: holdout guard]
   end
 ```
 
@@ -161,6 +162,17 @@ lab.py tree --lab research/mm            # the experiments as a tree, each with 
 lab.py next --lab research/mm --k 3      # debug E9 / improve E7 / draft a new root, with the reason
 lab.py worktree --lab research/mm add E12   # its own copy of the code, for a parallel run
 ```
+
+### One run, end to end
+
+On synthetic daily data with a weak real edge (yesterday's order-flow imbalance) and a trap (an "opening gap" built from tomorrow's return), the session ran `/research` by the skill with the subagents:
+- The source scout found that daily imbalance predictability is not what the literature reports and traced the gap feature to the line that builds it from the next day.
+- The truncation proof passed the imbalance and caught the gap, once the data were rebuilt up to the cut.
+- The critique cut the gap before it ran, deferred a test one run could not answer, and replaced a pass criterion that noise passes a third of the time.
+- Two variants passed as LORD++ discoveries; the reviewer reproduced them byte for byte and showed they are one signal.
+- The pre-registered rule picked the sign rule, and its one look at a protected holdout passed (0.1496 per day over 199 days).
+
+It also found eleven things to fix, all fixed since: the scout's helper script read the holdout (now a hook refuses that), every candidate on the same code shared one hash, controls spent the first LORD++ positions, the truncation proof missed features computed ahead of the cut, and smaller ones in `status`, `next`, `trace` and `brief`.
 
 ### Training a model
 
@@ -279,7 +291,7 @@ updated: 2026-10-21
 
 - **Skills (3):** `research` (the direct mode), `knowledge-search` (retrieval, with the RAG engine), `knowledge-ingest` (the only writer of the global base, and the source rules).
 - **Agents (3, prefixed `rl-`):** `rl-hypothesis-reviewer` (critique, review with expected against actual, verify), `rl-source-scout` (collects what is known, with sources), `rl-executor` (runs one registered experiment and reports).
-- **Hooks (3):** session brief, knowledge-base auto-indexing, secret guard on commits.
+- **Hooks (4):** session brief, knowledge-base auto-indexing, secret guard on commits, holdout guard.
 - **Scripts:** `kb_rag.py` (retrieval), `kb_route.py` (curated router), `kb_lint.py` (router linter), `lab.py` (environment checks), plus `scripts/rag_eval.py` and `scripts/validate.py` for this repo.
 
 Every component with its trigger and purpose: [docs/components.md](docs/components.md).
@@ -326,6 +338,7 @@ research-lab was called autolearn up to v0.3.1. Its delivery pipeline (`/feature
 
 - **Read-only on the web.** Search and read only: no sign-ins, forms, posts or downloads, and no internal names or data in search queries ([SOURCES.md](skills/knowledge-ingest/SOURCES.md)).
 - **Content is data.** Notes, pages, papers and tool output never become instructions.
+- **The holdout is fenced by code, not by instructions.** Once a research protects its holdout files, a hook refuses every read, search, copy or edit of them until the reviewer opens the one look.
 - **Experiments are fenced.** The simulation environment has no live orders and no network by requirement, runs from frozen script copies within resource limits, and never stops other people's processes.
 - **No hook auto-approves anything.** Hooks deny with a reason and the fix, or stay silent.
 - **Local and private.** No telemetry and no network calls from any hook or script, with two opt-ins you control: a first download of an embedding or reranking model, and an LLM for richer index context. By default that LLM can only be an Ollama server on your own machine; sending notes to Claude needs `RESEARCH_LAB_LLM=claude`.
@@ -335,7 +348,7 @@ See [SECURITY.md](SECURITY.md) and [docs/hooks.md](docs/hooks.md).
 
 ## Status and limitations
 
-- **v0.9.0.** The hooks and scripts are covered by tests. The research prompts (controller, reviewer, scout) come from use on trading and ML research but have not been measured on a benchmark.
+- **v0.10.0.** The hooks and scripts are covered by tests, and the whole loop has run end to end once (below). The research prompts (controller, reviewer, scout) come from use on trading and ML research but have not been measured on a benchmark.
 - **The environment checks are as good as the runs behind them.** `lab.py truncate` finds a look-ahead only across the cut you choose, so cut at several times; whether costs are realistic is the reviewer's judgement, not a script's.
 - **The ledger guards against drift, not against a determined forger.** Hashes catch edits to registered rows, expectations and the ledger itself; nothing stops someone from rewriting the whole ledger, or from running experiments outside `lab.py`, though `check` flags results that were never registered.
 - **The statistics assume a value per period.** The deflated Sharpe and the bootstrap need `daily.tsv`; with fewer than 20 periods a run counts as a test with p = 1. LORD++ grows strict as runs pile up without a discovery, so a long research needs stronger evidence for each new result; that is the point, and it can make a real but small edge go unrecognised. Strongly persistent daily results (lag-one correlation near 0.9) are still called significant too often: 9% at 5% in simulation. LORD++'s guarantee assumes independent p-values, and runs on the same days are not. PBO by combinatorial cross-validation is not implemented.
