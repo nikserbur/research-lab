@@ -544,6 +544,11 @@ def cmd_holdout(a) -> int:
         best = current_best(ledger)
         if not best or best["id"] != a.id or best["run_seq"] != latest_run(ledger, a.id)["seq"]:
             return fail(f"{a.id} is not the current BEST (`lab.py best`); only the best candidate is looked at")
+        from .selection import MIN_DSR, dsr_now, tested
+        test, trials = tested(ledger, a.id)[1], trial_count(ledger)
+        if test and dsr_now(test, trials) < MIN_DSR:
+            return fail(f"{a.id}: after {trials} trials its deflated Sharpe is {dsr_now(test, trials):.3f}, below {MIN_DSR}: "
+                        "the trials run since it became BEST deflate it too")
         env = a.lab / "KB" / "ENVIRONMENT.md"
         rows = tables.requirements(env, "verify")
         open_ = tables.unproven(rows) if rows else [f"no V requirements in {env}"]

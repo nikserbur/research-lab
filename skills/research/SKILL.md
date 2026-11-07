@@ -216,6 +216,8 @@ the current best) waits for the review: `KEEP` needs the judge's PASS on the lat
 reviewer's PASS for that run, which the reviewer records with `LAB review`. `BEST` is not a cell you set:
 `LAB best --lab <folder> <id>` grants it only to a LORD++ discovery with a deflated Sharpe of at least
 0.95 that beats the current best outside the paired interval (`LAB compare --lab <folder> <id> <best>`).
+The deflated Sharpe is taken again against the trials run so far, by `best` and by `holdout open`: a
+candidate run first is not judged against the one trial there was then.
 `LAB check` refuses a row that claims more than the ledger holds. Negative results are knowledge too.
 
 ## 7. Independent review: expected against actual

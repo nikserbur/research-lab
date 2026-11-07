@@ -2,8 +2,12 @@
 
 Every `lab.py run` is a test. When it ends, the run's `results/<id>/scores.tsv` (`daily.tsv` in
 older researches: a header, then one row per case, a day, a test cycle or an episode, with a `period`
-column and the score column) is tested at once, under the ledger's lock: deflated Sharpe against the best of all trials so far, a block-bootstrap p-value and
-interval, and the LORD++ level for this place in the sequence of runs. A run without a usable
+column and the score column) is tested at once, under the ledger's lock: deflated Sharpe against the best Sharpe that as many tries of noise would show, a
+block-bootstrap p-value and interval, and the LORD++ level for this place in the sequence of runs.
+The noise benchmark uses the variance of a Sharpe estimate whose true value is 0 (1/n), not the spread
+of the trials' Sharpe ratios: one trial that loses heavily to costs would otherwise raise the bar for
+every later one. The trial count only grows, so `best` and `holdout open` deflate again with the count
+of the day: a candidate run early is not judged against the few trials there were then. A run without a usable
 series is a test with p = 1, so untested runs still spend the error budget. The settings (value
 column, block length, alpha) are fixed for the whole research before its first run. Nothing here
 can be recomputed with friendlier settings: stats only shows the record, and compare is recorded
@@ -63,6 +67,19 @@ def series_file(lab: pathlib.Path, id: str) -> pathlib.Path:
     return out / "scores.tsv" if (out / "scores.tsv").exists() or not (out / "daily.tsv").exists() else out / "daily.tsv"
 
 
+def noise_benchmark(trials: int, n: int) -> float:
+    """The per-period Sharpe the best of `trials` strategies without an edge is expected to show over n periods."""
+    return stats.expected_max_sharpe(trials, 1 / n)
+
+
+def dsr_now(e: dict, trials: int) -> float:
+    """A recorded test's deflated Sharpe against the trials run so far (never above the recorded one)."""
+    if e.get("sharpe") is None or not e.get("n"):
+        return 0.0
+    return min(e["dsr"], stats.psr(e["sharpe"], noise_benchmark(max(trials, e["trials"]), e["n"]), e["n"],
+                                   e["skew"], e["kurt"]))
+
+
 def block_for(values: list, setting) -> float:
     return stats.auto_block(values) if setting == "auto" else min(max(float(setting), 1.0), len(values) / 4)
 
@@ -108,8 +125,7 @@ def record_test(lab: pathlib.Path, ledger: Ledger, id: str, run: dict, exit_code
             sr = stats.sharpe(values)
             pool = {e["candidate"]: e["sharpe"] for e in prior if e.get("sharpe") is not None}
             pool[run["candidate"]] = sr
-            variance = statistics.variance(pool.values()) if len(pool) >= 2 else 0.0
-            benchmark = stats.expected_max_sharpe(trials, max(variance, 1 / n))
+            benchmark = noise_benchmark(trials, n)
             block = block_for(values, settings["block"])
             boot = stats.bootstrap(values, block)
             n95 = stats.min_track_length_95(sr, trials, skew, kurt)
@@ -198,7 +214,11 @@ def cmd_stats(a) -> int:
         return fail(f"{a.id} has no tested run: every `lab.py run` is tested as it ends")
     for line in describe(e):
         print(line)
-    return 0 if e.get("discovery") and e.get("dsr", 0) >= MIN_DSR else 1
+    trials = trial_count(Ledger(a.lab))
+    now = dsr_now(e, trials)
+    if e.get("sharpe") is not None and trials > e["trials"]:
+        print(f"  deflated Sharpe now {now:.3f}, after {trials} trials")
+    return 0 if e.get("discovery") and now >= MIN_DSR else 1
 
 
 def cmd_compare(a) -> int:
@@ -269,8 +289,9 @@ def cmd_best(a) -> int:
     else:
         if not test["discovery"]:
             problems.append(f"not a discovery under LORD++ (p {test['p']:.2e} against level {test['lord_level']:.2e})")
-        if test["dsr"] < MIN_DSR:
-            problems.append(f"deflated Sharpe {test['dsr']:.3f} is below {MIN_DSR} after {test['trials']} trials")
+        trials = trial_count(ledger)
+        if dsr_now(test, trials) < MIN_DSR:
+            problems.append(f"deflated Sharpe {dsr_now(test, trials):.3f} is below {MIN_DSR} after {max(trials, test['trials'])} trials")
     best = current_best(ledger)
     if best and best["id"] != a.id:
         old_run = latest_run(ledger, best["id"])

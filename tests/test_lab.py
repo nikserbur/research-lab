@@ -450,6 +450,27 @@ class Protocol(ProtocolCase):
         benchmark = float(out.split("best Sharpe of ")[1].split(";")[0])
         self.assertAlmostEqual(benchmark, 0.033, delta=0.002)  # variance floored at 1/n, not the 0 of two copies
 
+    def test_a_trial_that_loses_heavily_does_not_raise_the_bar_for_the_next(self):
+        self.p("register", "E1")
+        self.series("E1", -3.0, 1)  # a cost-sunk strategy: a very negative Sharpe
+        self.row("E2", "net_per_trade > 0 & trades >= 30")
+        self.write("research/toy/KB/expect/E2.md", "x")
+        self.p("register", "E2")
+        out = self.series("E2", 0.3, 2)
+        benchmark = float(out.split("best Sharpe of ")[1].split(";")[0])
+        self.assertLess(benchmark, 0.05)  # noise over 250 periods, two tries; not the spread of the two Sharpes
+
+    def test_best_and_the_look_deflate_with_the_trials_run_since(self):
+        self.assertIn("E1 is BEST", self.make_best("E1", 0.12, 1))  # one trial: tested against 0
+        self.row("E2", "net_per_trade > 0 & trades >= 30")
+        self.write("research/toy/KB/expect/E2.md", "x")
+        self.p("register", "E2")
+        for seed in range(30):
+            self.series("E2", 0.0, 100 + seed, again=seed > 0)
+        self.assertIn("deflated Sharpe now", self.p("stats", "E1", expect=1))
+        self.protect_holdout()
+        self.assertIn("the trials run since it became BEST deflate it too", self.p("holdout", "open", "E1", expect=1))
+
     def test_compare_needs_the_same_periods(self):
         self.make_best("E1", 0.5, 1)
         self.row("E2", "net_per_trade > 0 & trades >= 30")
