@@ -210,6 +210,42 @@ class ResearchGuard(HookCase):
     def test_silent_without_research_or_on_a_broken_ledger(self):
         (self.lab / "LEDGER.jsonl").write_text("not json\n[1]\n")
         self.assertEqual(self.call("Read", file_path=str(self.holdout)), "allow")
+        (self.lab / "LEDGER.jsonl").write_bytes('{"kind": "protect"}\n'.encode("utf-16"))
+        self.assertEqual(self.call("Read", file_path=str(self.holdout)), "allow")
+        self.ledger([{"kind": "protect", "paths": [7, None, "x\x00y"]}, {"kind": "release", "paths": "nope"}])
+        self.assertEqual(self.call("Read", file_path=str(self.holdout)), "allow")
+
+    def test_a_protected_folder_covers_what_is_inside(self):
+        folder = self.repo / "data" / "holdout"
+        (folder / "2026").mkdir(parents=True)
+        self.ledger([{"kind": "protect", "paths": [str(folder.resolve())]}])
+        self.assertEqual(self.call("Read", file_path="data/holdout/2026/q1.csv"), "deny")
+        self.assertEqual(self.call("Bash", command="python3 sim.py data/holdout/2026/q1.csv"), "deny")
+        self.assertEqual(self.call("Bash", command=f"ls {folder}"), "deny")
+
+    def test_lab_commands_and_a_locked_file_pass_by(self):
+        lab = "python3 skills/research/scripts/lab.py holdout --lab research/mm"
+        self.ledger([{"kind": "protect", "paths": [str((self.repo / "data" / "holdout").resolve())]}])
+        for action in ("open E4", "status", "close E4 --metrics research/mm/sealed/m.tsv", "release"):
+            self.assertEqual(self.call("Bash", command=f"{lab} {action}"), "allow", action)
+        self.ledger([{"kind": "protect", "paths": [str(self.holdout.resolve())]}])
+        self.assertEqual(self.call("Grep", pattern="ret", path=str(self.repo)), "deny")  # readable: refused
+        os.chmod(self.holdout, 0)
+        try:
+            self.assertEqual(self.call("Grep", pattern="ret", path=str(self.repo)), "allow")  # cannot read it
+            self.assertEqual(self.call("Read", file_path=str(self.holdout)), "deny")
+        finally:
+            os.chmod(self.holdout, 0o644)
+
+    def test_a_release_ends_the_protection_and_the_registry_finds_other_folders(self):
+        self.ledger([{"kind": "protect", "paths": [str(self.holdout.resolve())]},
+                     {"kind": "release", "paths": [str(self.holdout.resolve())]}])
+        self.assertEqual(self.call("Read", file_path=str(self.holdout)), "allow")
+        elsewhere = pathlib.Path(self.tmp.name) / "elsewhere"
+        elsewhere.mkdir()
+        (elsewhere / "LEDGER.jsonl").write_text(json.dumps({"kind": "protect", "paths": [str(self.holdout.resolve())]}) + "\n")
+        (self.home / "protected-ledgers.txt").write_text(f"{elsewhere / 'LEDGER.jsonl'}\n/gone/LEDGER.jsonl\n")
+        self.assertEqual(self.call("Read", file_path=str(self.holdout)), "deny")
 
 
 class KbAutoindex(HookCase):

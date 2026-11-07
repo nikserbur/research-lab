@@ -18,12 +18,12 @@ import statistics
 
 from . import stats
 from .ledger import Ledger, read_metrics, sha256_file, text_lines
-from .protocol import bad_id, current_best, fail, journal, judged_latest, latest_run, trial_count
+from .protocol import bad_id, current_best, fail, is_control, journal, judged_latest, latest_run, trial_count
 
 MIN_PERIODS = 20
 MIN_DSR = 0.95
 MAX_ALPHA = 0.1
-DEFAULTS = {"column": "pnl", "block": "auto", "alpha": 0.05, "run_timeout": None, "max_trials": None}
+DEFAULTS = {"column": "pnl", "block": "auto", "alpha": 0.05, "run_timeout": None, "max_trials": None, "max_controls": 10}
 VERDICTS = ("PASS", "BLOCK")
 
 
@@ -124,12 +124,16 @@ def record_test(lab: pathlib.Path, ledger: Ledger, id: str, run: dict, exit_code
 
 def describe(e: dict) -> list:
     if e.get("sharpe") is None:
-        return [f"{e['id']}: {e.get('note', 'not tested')}; counts as a test with p = 1 (trial {e['trials']})"]
+        return [f"{e['id']}: {e.get('note', 'not tested')}; " + ("a control, so it spends no trial or LORD++ position"
+                if e.get("control") else f"counts as a test with p = 1 (trial {e['trials']})")]
+    alpha = e.get("setting_alpha") or DEFAULTS["alpha"]
     lines = [f"{e['id']}: {e['n']} periods, mean {e['mean']:.4g} (95% interval {e['lo']:.4g} to {e['hi']:.4g}, "
              f"block {e['block']:.1f}), Sharpe {e['sharpe']:.3f} per period",
              f"  {e['trials']} trials so far: noise alone would show a best Sharpe of {e['sharpe_noise_best']:.3f}; "
              f"deflated Sharpe {e['dsr']:.3f} (against 0: {e['psr']:.3f})",
-             (f"  a control: it tests the environment and spends no LORD++ position" if e.get("control") else
+             (f"  a control: it tests the environment and spends no LORD++ position; p(mean > 0) {e['p']:.2e}" +
+              (f"\n  ! below alpha {alpha:g}: right for a known case, a leak or a bug for doing nothing or a "
+               "shuffled target" if e["p"] < alpha else "") if e.get("control") else
               f"  p(mean > 0) {e['p']:.2e}; LORD++ level {e['lord_level']:.2e}: "
               f"{'a discovery' if e['discovery'] else 'not a discovery'}")]
     if e["dsr"] < MIN_DSR:
@@ -142,7 +146,7 @@ def describe(e: dict) -> list:
 def cmd_settings(a) -> int:
     ledger = Ledger(a.lab)
     current = research_settings(ledger)
-    if a.column is None and a.block is None and a.alpha is None and a.run_timeout is None and a.max_trials is None:
+    if all(getattr(a, k) is None for k in DEFAULTS):
         print("  ".join(f"{k} {v}" for k, v in current.items()) + ("" if ledger.last("settings") else "  (defaults)"))
         return 0
     if ledger.find("stats"):
@@ -150,11 +154,14 @@ def cmd_settings(a) -> int:
     new = {"column": a.column or current["column"], "block": a.block or current["block"],
            "alpha": a.alpha if a.alpha is not None else current["alpha"],
            "run_timeout": a.run_timeout if a.run_timeout is not None else current["run_timeout"],
-           "max_trials": a.max_trials if a.max_trials is not None else current["max_trials"]}
+           "max_trials": a.max_trials if a.max_trials is not None else current["max_trials"],
+           "max_controls": a.max_controls if a.max_controls is not None else current["max_controls"]}
     if new["run_timeout"] is not None and not 1 <= new["run_timeout"] <= 7 * 86400:
         return fail("run-timeout: seconds per run, from 1 to a week")
     if new["max_trials"] is not None and not 1 <= new["max_trials"] <= 100_000:
         return fail("max-trials: from 1 to 100000")
+    if not 0 <= new["max_controls"] <= 100:
+        return fail("max-controls: from 0 to 100 (controls spend no trial, so they are capped apart)")
     if not re.fullmatch(r"[A-Za-z_][\w.]*", new["column"]):
         return fail(f"column {new['column']!r}: a plain column name")
     if new["block"] != "auto":
@@ -245,6 +252,8 @@ def cmd_best(a) -> int:
     ledger = Ledger(a.lab)
     run, test = tested(ledger, a.id)
     problems = []
+    if is_control(a.lab, a.id) or (run and run.get("control")):
+        return fail(f"{a.id} is a control (round 0): it tests the environment and is never a candidate")
     if not judged_latest(ledger, a.id):
         problems.append("its latest run is not judged PASS")
     if not reviewed(ledger, a.id):

@@ -153,7 +153,7 @@ def cmd(name):  # a non-default --claude-dir also needs its data dir passed to t
 wanted = [
     ("SessionStart", "startup|resume|clear|compact", cmd("session_brief.py"), 10),
     ("PreToolUse", "Bash", cmd("check_secrets.py"), 20),
-    ("PreToolUse", "Read|Grep|Glob|Bash|Edit|Write|MultiEdit|NotebookEdit", cmd("research_guard.py"), 10),
+    ("PreToolUse", "Read|Grep|Bash|Edit|Write|MultiEdit|NotebookEdit", cmd("research_guard.py"), 10),
     ("PostToolUse", "Write|Edit|MultiEdit", cmd("kb_autoindex.py"), 10),
 ]
 h = cfg.setdefault("hooks", {})

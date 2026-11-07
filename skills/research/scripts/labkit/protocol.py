@@ -15,7 +15,7 @@ import subprocess
 import threading
 import time
 
-from . import tables
+from . import holdout, tables
 from .ledger import ID, Ledger, judge, parse_criterion, read_journal, read_metrics, sha256_bytes, sha256_file
 
 PRE_RUN = ("id", "round", "parent", "hypothesis", "change", "expected", "pass_criterion", "commit", "data", "seed")
@@ -93,6 +93,10 @@ def trial_count(ledger: Ledger) -> int:
     and are not counted."""
     return sum(1 for e in ledger.find("run_start") if not e.get("control")) + sum(
         max(0, int(e.get("configs") or 1) - 1) for e in ledger.find("stats") if not e.get("control"))
+
+
+def control_count(ledger: Ledger) -> int:
+    return sum(1 for e in ledger.find("run_start") if e.get("control"))
 
 
 def is_control(lab: pathlib.Path, id: str) -> bool:
@@ -208,16 +212,22 @@ def cmd_run(a) -> int:
         (out / "DONE").unlink()
     start = time.time()
 
+    control = is_control(a.lab, a.id)
+
     def within_budget(led: Ledger) -> dict:  # checked under the ledger's lock, so parallel runs cannot both slip in
-        if settings["max_trials"] and not is_control(a.lab, a.id) and trial_count(led) >= settings["max_trials"]:
-            raise BudgetSpent(settings["max_trials"])
+        if control and control_count(led) >= settings["max_controls"]:
+            raise BudgetSpent(f"the research's {settings['max_controls']} control runs are spent: a control spends "
+                              "no trial, so they are capped apart (`lab.py settings --max-controls` before the first run)")
+        if settings["max_trials"] and not control and trial_count(led) >= settings["max_trials"]:
+            raise BudgetSpent(f"the research's budget of {settings['max_trials']} trials is spent: stop, write the "
+                              "brief, or start a new research")
         return {}
 
     try:
         entry = ledger.append("run_start", compute=within_budget, id=a.id, command=a.command, candidate=candidate,
-                              hashes=hashes, pid=os.getpid(), control=is_control(a.lab, a.id))
+                              hashes=hashes, pid=os.getpid(), control=control)
     except BudgetSpent as e:
-        return fail(f"the research's budget of {e} trials is spent: stop, write the brief, or start a new research")
+        return fail(str(e))
     beat, stop = heartbeat(a.lab, entry), threading.Event()
     beat.touch()
 
@@ -409,11 +419,16 @@ def cmd_check(a) -> int:
         decision = row.get("decision", "").upper()
         if "BEST" in decision:
             best.append(id)
-        if ("KEEP" in decision or "BEST" in decision) and row.get("round", "").strip() != "0":
+        control = row.get("round", "").strip() == "0"
+        if "KEEP" in decision or "BEST" in decision:
             if not judged_latest(ledger, id):
                 errors.append(f"{id}: marked {row.get('decision')} without a PASS from lab.py judge on its latest run")
-            if not reviewed(ledger, id):
+            if not control and not reviewed(ledger, id):  # a control is judged, not reviewed
                 errors.append(f"{id}: marked {row.get('decision')} without a reviewer PASS for its latest run")
+        start = latest_run(ledger, id)
+        if start and bool(start.get("control")) != control:
+            errors.append(f"{id}: ran as {'a control' if start.get('control') else 'a trial'} but its round is now "
+                          f"{row.get('round', '').strip() or 'empty'}: a round is fixed once it runs; register a new id")
         if id not in registered and row.get("result", "").strip():
             errors.append(f"{id}: has a result but was never registered")
     warnings = [f"{e['id']}: started {e['ts']} (pid {e.get('pid')}), no end: running, or crashed" for e in unfinished(ledger)]
@@ -432,7 +447,8 @@ def cmd_check(a) -> int:
         warnings.append(f"{recorded_best['id']} is BEST in the ledger; mark its row BEST")
     judged = [e["verdict"] for e in ledger.find("judge")]
     tests = ledger.find("stats")
-    print(f"{len(registered)} registered, {len(ledger.find('run_start'))} runs ({trial_count(ledger)} trials), "
+    print(f"{len(registered)} registered, {len(ledger.find('run_start'))} runs ({trial_count(ledger)} trials, "
+          f"{control_count(ledger)} control runs), "
           f"{judged.count('PASS')} PASS / {judged.count('FAIL')} FAIL / {judged.count('CRASH')} CRASH, "
           f"{len(tests)} tested ({sum(e['discovery'] for e in tests)} discoveries), "
           f"best {recorded_best['id'] if recorded_best else '-'}, {len(ledger.find('holdout_open'))} holdout look(s)")
@@ -445,20 +461,35 @@ def cmd_check(a) -> int:
 
 def cmd_holdout(a) -> int:
     ledger = Ledger(a.lab)
-    if a.action == "protect":  # the research_guard hook keeps every tool away from these until a look is open
+    opens, closes = ledger.find("holdout_open"), ledger.find("holdout_close")
+    look_open = len(opens) > len(closes)
+    if a.action == "protect":  # mode 000 until a look is open; the research_guard hook explains refusals
         given = ([a.id] if a.id else []) + list(a.paths)
-        if not given:
+        known = holdout.entries(ledger)
+        if not given and not known:
             return fail("protect needs the holdout files: lab.py holdout --lab DIR protect PATH ...")
-        paths = [str(pathlib.Path(p).resolve()) for p in given]
-        missing = [p for p in paths if not pathlib.Path(p).exists()]
-        if missing:
-            return fail(f"no such file: {', '.join(missing)}")
-        ledger.append("protect", paths=paths)
-        print(f"protected: {', '.join(paths)}; tools that touch them are refused until a look is open")
+        if look_open:
+            return fail("a look is open; protect after it is closed")
+        items, problems = holdout.protect(ledger, given)
+        if problems:
+            return fail("; ".join(problems))
+        for item in items:
+            print(f"protected {item['path']} (sha256 {item['sha256'][:12]}): no permissions until a look is open")
+        if known:
+            print(f"locked again: {len(known)} path(s) protected before")
+        if os.name == "nt":
+            print("! on Windows a mode only sets read-only: only the hook stands between tools and the holdout")
+        return 0
+    if a.action == "release":
+        if look_open:
+            return fail("a look is open; close it first")
+        if not closes and not a.force:
+            return fail("the holdout has not been looked at; release gives it back for good (--force if that is meant)")
+        released = holdout.release(ledger)
+        print(f"released: {', '.join(released) or 'nothing'}")
         return 0
     if bad_id(a):
         return 1
-    opens, closes = ledger.find("holdout_open"), ledger.find("holdout_close")
     budget = opens[0]["budget"] if opens else (a.budget or 1)
     if a.action == "status":
         print(f"look budget {budget} for this research; {len(opens)} used")
@@ -466,8 +497,8 @@ def cmd_holdout(a) -> int:
             print(f"  look {c['look']}: {c['id']} {c['verdict']} {json.dumps(c['metrics'])}")
         if len(opens) > len(closes):
             print(f"  look {len(opens)}: {opens[-1]['id']} open")
-        guarded = sorted({p for e in ledger.find("protect") for p in e.get("paths", [])})
-        print("protected: " + (", ".join(guarded) if guarded else "nothing yet (lab.py holdout protect PATH)"))
+        lines = holdout.check(ledger, look_open)
+        print("protected:" + ("".join(f"\n  {line}" for line in lines) if lines else " nothing yet (lab.py holdout protect PATH)"))
         return 0
     if not a.id:
         return fail(f"holdout {a.action} needs an experiment id")
@@ -476,6 +507,10 @@ def cmd_holdout(a) -> int:
             return fail(f"the look budget was fixed at {budget} by the first look")
         if not 1 <= budget <= MAX_LOOKS:
             return fail(f"a look budget of {budget}: 1 to {MAX_LOOKS} looks per research, or the holdout becomes a selection set")
+        if is_control(a.lab, a.id):
+            return fail(f"{a.id} is a control (round 0); a control is never a candidate")
+        if not holdout.entries(ledger):
+            return fail("nothing is protected: `lab.py holdout protect PATH` before the first look")
         if not judged_latest(ledger, a.id):
             return fail(f"{a.id}: its latest run was not judged PASS in simulation; only such a candidate is looked at")
         best = current_best(ledger)
@@ -499,6 +534,7 @@ def cmd_holdout(a) -> int:
             return fail(f"look budget {budget} is used; another look would make any result SPOILED")
         candidate = ledger.last("run_start", a.id)["candidate"]
         ledger.append("holdout_open", id=a.id, candidate=candidate, budget=budget, look=len(opens) + 1, by=a.by)
+        holdout.open_for_look(ledger)
         (a.lab / "sealed").mkdir(parents=True, exist_ok=True)
         print(f"look {len(opens) + 1} of {budget} is open for {a.id} (candidate {candidate}). Run it once on the "
               f"holdout, write the report into sealed/ (outside KB/), then: lab.py holdout close {a.id} --metrics FILE")
@@ -524,6 +560,7 @@ def cmd_holdout(a) -> int:
         return fail(f"{a.metrics} has no finite value for {e}")
     ledger.append("holdout_close", id=a.id, verdict=verdict, look=len(opens), metrics_sha=digest,
                   metrics={name: metrics[name] for name, _, _ in clauses})
+    holdout.close_after_look(ledger)
     print(f"{a.id} on the holdout: {verdict}")
     for line in lines:
         print(f"  {line}")
@@ -560,7 +597,8 @@ def cmd_brief(a) -> int:
     path = pathlib.Path(a.file)
     values, missing, count = known_numbers(a.lab, Ledger(a.lab)), [], 0
     for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-        line = re.sub(r"\b(90|95|99)% (?=(?:confidence|interval|block-bootstrap))", "", THOUSANDS.sub("", line))
+        line = re.sub(r"\b(80|90|95|99)%[ -](?=(?:CI\b|confidence|credible|prediction|interval|(?:block[ -])?bootstrap))",
+                      "", THOUSANDS.sub("", line), flags=re.I)
         for token in BRIEF_NUMBER.findall(line):
             if "." not in token and "%" not in token and 1900 <= int(token.lstrip("+-")) <= 2100:
                 continue  # a year

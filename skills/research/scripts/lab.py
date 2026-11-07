@@ -9,12 +9,14 @@ Protocol (state lives in <lab>/LEDGER.jsonl, append-only and hash-chained; <lab>
     lab.py check --lab DIR                           edits after registration, KEEP without PASS, broken chain
     lab.py holdout --lab DIR open|close|status [ID] [--metrics F] [--budget N]
                                                      one look budget per research, opened before the run
-    lab.py holdout --lab DIR protect PATH ...        the holdout files; a hook refuses any tool that touches
-                                                     them until a look is open
+    lab.py holdout --lab DIR protect [PATH ...]      the holdout files lose every permission until a look is open
+                                                     (open restores them, close locks again, release is final;
+                                                     no PATH locks the protected ones again)
     lab.py brief --lab DIR BRIEF.md                  every number in the brief traces to the record
 
 Selection (every run is tested as it ends on results/ID/daily.tsv: a `period` column and a value column):
     lab.py settings --lab DIR [--column pnl] [--block auto|N] [--alpha 0.05] [--run-timeout S] [--max-trials N]
+                     [--max-controls N]
                                                      fixed for the whole research, before its first run
     lab.py stats --lab DIR ID                        the recorded test of the latest run: deflated Sharpe after N
                                                      trials, block-bootstrap p and interval, LORD++ decision
@@ -116,8 +118,13 @@ def expected_stages(path: pathlib.Path) -> list:
     """Stages the trace should show: rows whose "Shows in" cell names the trace (a row shown only in metrics,
     such as the outcome of a decision, is not a trace stage)."""
     rows = tables.table_rows(path.read_text(encoding="utf-8"), ("stage",))
+
+    def shows_in(row: dict) -> str:  # the template's header is "Shows in (trace field or metric)"
+        cell = next((v for k, v in row.items() if k.startswith("shows in")), "")
+        return cell.strip() or "trace"
+
     return [r["stage"].strip("`* ").lower() for r in rows if r.get("stage", "").strip("`* ")
-            and ("trace" in r.get("shows in", "trace").lower())]
+            and "trace" in shows_in(r).lower()]
 
 
 def cmd_trace(a) -> int:
@@ -353,12 +360,13 @@ def main(argv=None) -> int:
     s.add_argument("--again", action="store_true")
     with_lab(sub, "check")
     s = with_lab(sub, "holdout")
-    s.add_argument("action", choices=("open", "close", "status", "protect"))
+    s.add_argument("action", choices=("open", "close", "status", "protect", "release"))
     s.add_argument("id", nargs="?")
     s.add_argument("paths", nargs="*", help="protect: the holdout files")
     s.add_argument("--metrics")
     s.add_argument("--budget", type=int)
     s.add_argument("--by", default="rl-hypothesis-reviewer")
+    s.add_argument("--force", action="store_true", help="release: give back a holdout that was never looked at")
     s = with_lab(sub, "brief")
     s.add_argument("file")
     s = with_lab(sub, "settings")
@@ -367,6 +375,7 @@ def main(argv=None) -> int:
     s.add_argument("--alpha", type=float)
     s.add_argument("--run-timeout", type=int)
     s.add_argument("--max-trials", type=int)
+    s.add_argument("--max-controls", type=int)
     with_lab(sub, "tree")
     with_lab(sub, "next").add_argument("--k", type=int, default=3)
     s = with_lab(sub, "worktree")

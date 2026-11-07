@@ -11,7 +11,7 @@ import re
 
 from . import tables
 from .ledger import Ledger
-from .protocol import KNOWLEDGE_CAP, current_best, fail, journal, live, runs, trial_count
+from .protocol import KNOWLEDGE_CAP, control_count, current_best, fail, journal, live, runs, trial_count
 
 
 def jobs(lab: pathlib.Path, ledger: Ledger) -> list:
@@ -85,7 +85,8 @@ def summary(lab: pathlib.Path) -> list:
     lines.append(f"- Rounds: {len(rounds)}" + (f" (latest {rounds[-1]})" if rounds else "")
                  + f"; experiments: {len(rows)} (" + ", ".join(f"{k} {v}" for k, v in sorted(decisions.items())) + ")")
     tests = ledger.find("stats")
-    lines.append(f"- Trials: {trial_count(ledger)}; tested runs: {len(tests)}; discoveries under LORD++: "
+    lines.append(f"- Trials: {trial_count(ledger)} (and {control_count(ledger)} control runs); tested runs: "
+                 f"{len(tests)}; discoveries under LORD++: "
                  f"{sum(1 for e in tests if e.get('discovery'))}")
     best = current_best(ledger)
     stale = False

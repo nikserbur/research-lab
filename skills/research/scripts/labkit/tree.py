@@ -142,17 +142,20 @@ def suggestions(lab, ledger: Ledger, k: int) -> list:
     out, room = [], max(1, k // 2)
     for id, node in tree.items():  # what is owed before anything new
         if node["state"] == "not run":
-            out.append((f"run {id}", "registered, never run"))
+            out.append((f"run {id}", "a control, never run" if node["control"] else "registered, never run"))
         elif node["state"] == "interrupted":
             out.append((f"rerun or drop {id}", "interrupted"))
+        elif node["control"]:  # a control's fix is the environment's, not a child idea; doing nothing has no series
+            if node["state"] in ("crashed", "timed out") and not dropped(node):
+                out.append((f"fix the environment for control {id}", f"it {node['state']}: nothing compares until it runs"))
         elif node["state"] == "done" and lower(node) is None and not dropped(node):
             out.append((f"fix the harness for {id}", "it ran but wrote no usable daily.tsv, so it could not be tested"))
     debug = [id for id, n in tree.items() if n["state"] == "crashed" and not n["children"] and not dropped(n)
-             and debug_depth(tree, id) <= MAX_DEBUG]
+             and not n["control"] and debug_depth(tree, id) <= MAX_DEBUG]
     out += [(f"debug {id}", f"it crashed (fix chain {debug_depth(tree, id)} of {MAX_DEBUG}); a fix is a child of it")
             for id in debug[:room]]
     out += [(f"shrink or drop {id}", "stopped by the time budget") for id, n in tree.items()
-            if n["state"] == "timed out" and not n["children"] and not dropped(n)][:room]
+            if n["state"] == "timed out" and not n["children"] and not dropped(n) and not n["control"]][:room]
     good = sorted((n for n in tree.values() if usable(n) and not tainted(tree, n["id"])), key=lower, reverse=True)
     worked_out = {}
     for n in good:
@@ -174,7 +177,7 @@ def suggestions(lab, ledger: Ledger, k: int) -> list:
     roots = {root_of(tree, id) for id in tree if not tree[id]["control"]}  # a control is not an idea
     last_best = max((e["seq"] for e in ledger.find("best")), default=0)
     last_root = max((n["seq"] or 0 for n in tree.values() if n["parent"] not in tree and not n["control"]), default=0)
-    since = sum(1 for s in ledger.find("run_start") if s["seq"] > max(last_best, last_root))
+    since = sum(1 for s in ledger.find("run_start") if s["seq"] > max(last_best, last_root) and not s.get("control"))
     if len(roots) < MIN_ROOTS:
         out.insert(0, ("draft a new root", f"only {len(roots)} idea{'s' if len(roots) != 1 else ''} so far; "
                                            "start a different one (an experiment without a parent)"))

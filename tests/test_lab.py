@@ -5,6 +5,7 @@
 import json
 import os
 import pathlib
+import stat
 import subprocess
 import sys
 import tempfile
@@ -99,11 +100,12 @@ class Trace(LabCase):
         self.assertIn("no such file", self.lab("trace", str(self.dir / "t.tsv"), expect=2))
 
     def test_an_outcome_shown_in_metrics_is_not_a_missing_stage(self):
-        expect = ("| Stage | Should do | Shows in |\n|---|---|---|\n| decision | go long | trace action |\n"
-                  "| outcome | earn | metrics net_per_day |\n")
+        expect = ("| Stage | Should do | Shows in (trace field or metric) |\n|---|---|---|\n"
+                  "| decision | go long | trace action |\n| outcome | earn | metrics net_per_day |\n| filter | skip | |\n")
         out = self.lab("trace", self.write("t.tsv", "ts\tstage\taction\tinputs\n1\tdecision\tlong\tx\n"),
                        "--expect", self.write("E.md", expect))
         self.assertNotIn("stage 'outcome'", out)
+        self.assertIn("'filter'", out)  # a blank cell keeps the stage
 
     def test_missing_columns_and_blind_decisions(self):
         out = self.lab("trace", self.write("t.tsv", "ts\tstage\n1\tsignal\n"), expect=1)
@@ -210,6 +212,17 @@ class ProtocolCase(LabCase):
         rows = "".join(f"| V{i} | requirement {i} | ✅ | evidence {i} |\n" for i in range(1, 6))
         self.write("research/toy/KB/ENVIRONMENT.md", "| # | Requirement | Status | Evidence |\n|---|---|---|---|\n" + rows)
 
+    def protect_holdout(self):
+        path = pathlib.Path(self.write("data/holdout_b.csv", "date,ret\n"))
+        self.p("holdout", "protect", str(path))
+        return path
+
+    def control(self, id="C0", decision=""):
+        self.row(id, "net_per_trade < 1", decision=decision)
+        path = self.labdir / "KB" / "EXPERIMENTS.tsv"
+        path.write_text(path.read_text().replace(f"{id}\t1\t", f"{id}\t0\t"))
+        self.write(f"research/toy/KB/expect/{id}.md", "x")
+
     def holdout_metrics(self, *flags):
         out = self.labdir / "sealed" / "E1"
         subprocess.run([sys.executable, str(TOY), str(out), *flags], check=True)
@@ -258,7 +271,7 @@ class Protocol(ProtocolCase):
         self.assertIn("has run already", self.run_toy("E1", expect=1))
         self.run_toy("E1", "--honest", again=True)
         self.assertIn("E1: FAIL  (2 trials", self.p("judge", "E1", expect=1))
-        self.assertIn("1 registered, 2 runs (2 trials), 1 PASS / 1 FAIL", self.p("check"))
+        self.assertIn("1 registered, 2 runs (2 trials, 0 control runs), 1 PASS / 1 FAIL", self.p("check"))
 
     def test_edits_after_registration_are_caught(self):
         self.p("register", "E1")
@@ -279,6 +292,7 @@ class Protocol(ProtocolCase):
         self.assertIn("1 PASS", self.p("check"))
         self.run_toy("E1", "--honest", again=True)  # a new attempt that nobody judged
         self.assertIn("without a PASS from lab.py judge on its latest run", self.p("check", expect=1))
+        self.protect_holdout()
         self.assertIn("latest run was not judged PASS", self.p("holdout", "open", "E1", expect=1))
 
     def test_changed_metrics_multi_row_and_non_finite_values_are_refused(self):
@@ -335,6 +349,8 @@ class Protocol(ProtocolCase):
     def test_holdout_is_bound_to_the_best_candidate_and_spent_by_a_failure(self):
         self.p("register", "E1")
         self.series("E1", 0.5, 1)
+        self.assertIn("nothing is protected", self.p("holdout", "open", "E1", expect=1))
+        holdout = self.protect_holdout()
         self.assertIn("not judged PASS", self.p("holdout", "open", "E1", expect=1))
         self.p("judge", "E1")
         self.assertIn("not the current BEST", self.p("holdout", "open", "E1", expect=1))
@@ -343,8 +359,13 @@ class Protocol(ProtocolCase):
         self.assertIn("verification requirements are not proven", self.p("holdout", "open", "E1", expect=1))
         self.proven_verification()
         self.assertIn("1 to 3 looks", self.p("holdout", "open", "E1", "--budget", "1000", expect=1))
+        self.assertEqual(stat.S_IMODE(holdout.stat().st_mode), 0)
         self.assertIn("look 1 of 2 is open", self.p("holdout", "open", "E1", "--budget", "2"))
+        self.assertEqual(holdout.read_text(), "date,ret\n")  # readable for the look
+        self.assertIn("open for the look", self.p("holdout", "status"))
         self.assertIn("still open", self.p("holdout", "open", "E1", expect=1))
+        self.assertIn("a look is open", self.p("holdout", "protect", expect=1))
+        self.assertIn("close it first", self.p("holdout", "release", expect=1))
         self.assertIn("looked at on the holdout", self.series("E1", 0.5, 1, again=True, expect=1))
         sim = str(self.labdir / "results" / "E1" / "metrics.tsv")
         self.assertIn("written by the holdout run", self.p("holdout", "close", "E1", "--metrics", sim, expect=1))
@@ -356,6 +377,7 @@ class Protocol(ProtocolCase):
         subprocess.run([sys.executable, str(SERIES), str(out), "-0.5", "9"], check=True)
         self.assertIn("E1 on the holdout: FAIL",
                       self.p("holdout", "close", "E1", "--metrics", str(out / "metrics.tsv"), expect=1))
+        self.assertEqual(stat.S_IMODE(holdout.stat().st_mode), 0)  # locked again
         self.assertIn("the holdout is spent", self.p("holdout", "open", "E1", expect=1))
         self.assertIn("fixed at 2", self.p("holdout", "open", "E1", "--budget", "3", expect=1))
         self.assertIn("look 1: E1 FAIL", self.p("holdout", "status"))
@@ -496,7 +518,7 @@ class Protocol(ProtocolCase):
         out = self.p("run", "E1", "--code", script, "--", sys.executable, script, str(self.labdir / "results" / "E1"))
         self.assertIn("40 trials so far", out)
         self.assertIn("40 trials so far", self.p("judge", "E1"))
-        self.assertIn("(40 trials)", self.p("check"))
+        self.assertIn("(40 trials, 0 control runs)", self.p("check"))
         self.assertIn("Trials: 40", self.p("status"))
 
     def test_next_lists_what_is_owed(self):
@@ -536,12 +558,40 @@ class Protocol(ProtocolCase):
         self.write("research/toy/KB/KNOWLEDGE.md", "# Knowledge\n\n" + "## Note\n- x\n" * 4000)
         self.assertIn("move older sections to KB/archive/", self.p("check"))
 
-    def test_holdout_files_are_protected_in_the_ledger(self):
-        self.write("holdout_b.csv", "x")
-        out = self.p("holdout", "protect", str(self.dir / "holdout_b.csv"))
-        self.assertIn("protected:", out)
-        self.assertIn("holdout_b.csv", self.p("holdout", "status"))
+    def test_holdout_files_lose_every_permission_and_are_checked(self):
+        self.assertIn("protect needs the holdout files", self.p("holdout", "protect", expect=1))
+        path = pathlib.Path(self.write("holdout_b.csv", "x"))
+        self.assertIn("no permissions until a look is open", self.p("holdout", "protect", str(path)))
+        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0)
+        if os.geteuid() != 0:  # root reads anything
+            with self.assertRaises(PermissionError):
+                path.read_text()
+        self.assertIn("holdout_b.csv: intact, sha256", self.p("holdout", "status"))
+        self.assertIn(", locked", self.p("holdout", "status"))
+        os.chmod(path, 0o644)
+        self.assertIn("was READABLE, locked again now", self.p("holdout", "status"))
+        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0)
+        os.chmod(path, 0o644)
+        self.assertIn("locked again: 1", self.p("holdout", "protect"))
+        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0)
+        os.chmod(path, 0o644)
+        path.write_text("y")
+        self.assertIn("CHANGED since it was protected", self.p("holdout", "status"))
         self.assertIn("no such file", self.p("holdout", "protect", str(self.dir / "nope.csv"), expect=1))
+        self.assertIn("has not been looked at", self.p("holdout", "release", expect=1))
+        self.assertIn("released: " + str(path.resolve()), self.p("holdout", "release", "--force"))
+        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o644)
+        self.assertIn("nothing yet", self.p("holdout", "status"))
+
+    def test_a_holdout_folder_is_locked_with_everything_in_it(self):
+        self.write("hold/a.csv", "1")
+        self.write("hold/deeper/b.csv", "2")
+        folder = self.dir / "hold"
+        self.p("holdout", "protect", str(folder))
+        self.assertEqual(stat.S_IMODE(folder.stat().st_mode), 0)
+        self.assertIn("hold: intact", self.p("holdout", "status"))
+        self.p("holdout", "release", "--force")
+        self.assertEqual((folder / "deeper" / "b.csv").read_text(), "2")
 
     def test_controls_spend_no_error_budget_and_no_trial(self):
         self.row("C0", "net_per_day < 1")
@@ -557,6 +607,29 @@ class Protocol(ProtocolCase):
         self.assertIn("level 1.52e-02", out)  # the first LORD++ position, not the second
         self.assertNotIn("C0", self.p("fdr"))
 
+    def test_controls_are_capped_judged_and_never_best(self):
+        self.p("settings", "--max-controls", "2")
+        self.control("C0")
+        self.p("register", "C0")
+        self.assertIn("! below alpha", self.series("C0", 0.5, 3))  # a do-nothing control should show nothing
+        self.assertIn("is a control", self.p("best", "C0", expect=1))
+        self.control("C1")
+        self.p("register", "C1")
+        script = self.write("crash.py", "raise SystemExit(3)\n")
+        out = self.p("run", "C1", "--code", script, "--", sys.executable, script, expect=3)
+        self.assertIn("a control, so it spends no trial", out)
+        self.control("C2")
+        self.p("register", "C2")
+        self.assertIn("2 control runs are spent", self.series("C2", 0.0, 4, expect=1))
+        self.control("C0", decision="KEEP")
+        self.assertIn("C0: marked KEEP without a PASS from lab.py judge", self.p("check", expect=1))
+        self.p("judge", "C0", expect=None)
+        out = self.p("check", expect=None)
+        self.assertNotIn("C0: marked KEEP", out)  # a control is judged, not reviewed
+        self.assertIn("0 trials, 2 control runs", out)
+        self.row("C0", "net_per_trade < 1", decision="KEEP")  # round 1 now: a trial in disguise
+        self.assertIn("C0: ran as a control but its round is now 1", self.p("check", expect=1))
+
     def test_the_candidate_includes_the_command(self):
         self.p("register", "E1")
         self.series("E1", 0.5, 1)
@@ -567,6 +640,8 @@ class Protocol(ProtocolCase):
     def test_a_confidence_level_is_not_a_result(self):
         self.passed()
         brief = self.write("research/toy/BRIEF.md", "E1 earned 0.039 per trade (95% interval shown in the status).\n")
+        self.assertIn("1 of 1 numbers trace", self.p("brief", brief))
+        self.write("research/toy/BRIEF.md", "E1: 0.039 per trade, 95% CI and 90% credible interval in the status.\n")
         self.assertIn("1 of 1 numbers trace", self.p("brief", brief))
 
     def test_the_brief_traces_every_number_to_the_record(self):
@@ -740,6 +815,16 @@ class SearchTree(ProtocolCase):
         log = subprocess.run(["git", "-C", str(repo), "log", "--oneline", "exp/toy-E1"], capture_output=True, text=True).stdout
         self.assertEqual(len(log.splitlines()), 2)
 
+
+    def test_a_control_is_not_an_idea_to_grow(self):
+        self.control("C0")
+        self.p("register", "C0")
+        script = self.write("crash.py", "raise SystemExit(3)\n")
+        self.p("run", "C0", "--code", script, "--", sys.executable, script, expect=3)
+        out = self.p("next")
+        self.assertIn("fix the environment for control C0", out)
+        self.assertNotIn("debug C0", out)
+        self.assertIn("draft a new root", out)  # still no idea of its own
 
 class ToyResearch(LabCase):
     """The planted look-ahead is caught by the truncation test, and only where it is."""
