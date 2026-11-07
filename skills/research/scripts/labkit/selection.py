@@ -21,9 +21,9 @@ import re
 import statistics
 
 from . import stats
-from .ledger import Ledger, read_metrics, sha256_file, text_lines
-from .protocol import (bad_id, current_best, fail, is_control, journal, judged_latest, latest_run, protocol_problem,
-                       trial_count)
+from .ledger import Ledger, parse_criterion, read_metrics, sha256_file, text_lines
+from .protocol import (bad_id, closed, current_best, fail, is_control, journal, judged_latest, latest_run,
+                       protocol_problem, trial_count)
 
 MIN_PERIODS = 20
 MIN_DSR = 0.95
@@ -267,6 +267,8 @@ def cmd_review(a) -> int:
     if bad_id(a):
         return 1
     ledger = Ledger(a.lab)
+    if closed(ledger):
+        return fail(f"the research is closed ({closed(ledger)['reason']}); `lab.py close --reopen` first")
     run = latest_run(ledger, a.id)
     if not run:
         return fail(f"{a.id} has not run")
@@ -297,6 +299,19 @@ def problems_of(lab: pathlib.Path, ledger: Ledger, id: str, trials: int) -> list
             problems.append(f"not a discovery under LORD++ (p {test['p']:.2e} against level {test['lord_level']:.2e})")
         if dsr_now(test, trials) < MIN_DSR:
             problems.append(f"deflated Sharpe {dsr_now(test, trials):.3f} is below {MIN_DSR} after {max(trials, test['trials'])} trials")
+    settings = research_settings(ledger)
+    key = (settings.get("select_by") or "").lstrip("-")
+    if key and run:
+        try:
+            if key not in read_metrics(lab / "results" / id / "metrics.tsv"):
+                problems.append(f"its metrics.tsv has no {key}, the metric BEST is chosen by (`settings --select-by`)")
+        except (OSError, ValueError):
+            problems.append(f"its metrics.tsv cannot be read for {key}")
+    reg = ledger.last("register", id) or {}
+    names = {name for name, _, _ in parse_criterion(reg["criterion"])} if reg.get("criterion") else set()
+    for scenario in filter(None, (settings.get("scenarios") or "").split(",")):
+        if not any(n.endswith("_" + scenario) for n in names):
+            problems.append(f"its criterion has no clause on a *_{scenario} metric, which this research requires")
     return problems
 
 
@@ -311,18 +326,29 @@ def choose(lab: pathlib.Path, ledger: Ledger, cands: dict, settings: dict):
     """(winner, members, dropped, value) or (None, error): the model confidence set of the candidates'
     score series on their shared periods, then the highest `select_by` within it (the mean score unless
     the research named a metric before its first run; a leading - means lower is better)."""
-    series = {}
+    series, left_out = {}, []
     for id, (run, test) in cands.items():
         path = series_file(lab, id)
-        if sha256_file(path) != test["daily_sha"]:
-            return None, f"{path} changed after its run was tested"
-        series[id] = read_series(path, settings["column"])
-    shared = [k for k in series[next(iter(series))] if all(k in v for v in series.values())]
-    if len(shared) < MIN_PERIODS:
-        return None, f"the candidates share {len(shared)} periods; at least {MIN_PERIODS} are needed to choose between them"
-    values = {id: [v[k] for k in shared] for id, v in series.items()}
-    spread = [x - fmean_of(values, t) for id in values for t, x in enumerate(values[id])]
-    block = block_for(spread, settings["block"]) if len(cands) > 1 else 1.0
+        try:
+            if sha256_file(path) != test["daily_sha"]:
+                raise ValueError(f"{path.name} changed after its run was tested")
+            series[id] = read_series(path, settings["column"])
+        except (OSError, ValueError) as e:
+            left_out.append((id, str(e)))
+    order = {e["id"]: e["seq"] for e in ledger.find("register")}
+    shared = None
+    for id in sorted(series, key=lambda i: (-len(series[i]), order.get(i, 0))):  # the longest first
+        both = [k for k in (shared if shared is not None else series[id]) if k in series[id]]
+        if len(both) < max(MIN_PERIODS, (len(shared) if shared else len(series[id])) // 2):
+            left_out.append((id, f"shares {len(both)} periods with the others: compare it on its own window"))
+            continue
+        shared = both
+    kept = {id: v for id, v in series.items() if id not in dict(left_out)}
+    if not kept:
+        return None, "no candidate can be compared: " + "; ".join(f"{i}: {why}" for i, why in left_out)
+    values = {id: [v[k] for k in shared] for id, v in kept.items()}
+    block = max((block_for([x - fmean_of(values, t) for t, x in enumerate(values[id])], settings["block"])
+                 for id in values), default=1.0) if len(values) > 1 else 1.0
     members, dropped = stats.confidence_set(values, block, settings["alpha"])
     key = (settings.get("select_by") or "").strip()
     def value(id):
@@ -330,10 +356,9 @@ def choose(lab: pathlib.Path, ledger: Ledger, cands: dict, settings: dict):
             return statistics.fmean(values[id])
         metrics = read_metrics(lab / "results" / id / "metrics.tsv")
         name, sign = (key[1:], -1) if key.startswith("-") else (key, 1)
-        return sign * metrics.get(name, float("-inf") * sign)
-    order = {e["id"]: e["seq"] for e in ledger.find("register")}
+        return sign * metrics[name]  # present: problems_of requires it
     winner = max(members, key=lambda id: (value(id), -order.get(id, 0)))
-    return winner, (members, dropped, value(winner), len(shared))
+    return winner, (members, dropped, value(winner), len(shared), left_out)
 
 
 def fmean_of(values: dict, t: int) -> float:
@@ -342,6 +367,8 @@ def fmean_of(values: dict, t: int) -> float:
 
 def cmd_best(a) -> int:
     ledger = Ledger(a.lab)
+    if closed(ledger):
+        return fail(f"the research is closed ({closed(ledger)['reason']}); `lab.py close --reopen` first")
     if protocol_problem(ledger):
         return fail(protocol_problem(ledger))
     trials = trial_count(ledger)
@@ -359,7 +386,7 @@ def cmd_best(a) -> int:
     winner, detail = choose(a.lab, ledger, cands, settings)
     if winner is None:
         return fail(detail)
-    members, dropped, value, shared = detail
+    members, dropped, value, shared, left_out = detail
     if a.id and a.id != winner:
         return fail(f"{a.id} cannot be BEST: the selection over all {len(cands)} candidates picks {winner} "
                     f"(confidence set {', '.join(sorted(members))}; chosen by {settings.get('select_by') or 'the mean score'})")
@@ -367,6 +394,8 @@ def cmd_best(a) -> int:
     run = cands[winner][0]
     pool = sorted([id, cands[id][0]["seq"]] for id in cands)
     print(f"{len(cands)} candidates on {shared} shared periods: {', '.join(sorted(cands))}")
+    for id, why in left_out:
+        print(f"  {id} left out of this selection: {why}")
     for id, p in dropped:
         print(f"  {id} left the confidence set (p {p:.3f})")
     print(f"  confidence set at alpha {settings['alpha']:g}: {', '.join(sorted(members))}; chosen by "
@@ -376,7 +405,8 @@ def cmd_best(a) -> int:
         return 0
     ledger.append("best", id=winner, run_seq=run["seq"], previous=best["id"] if best else "", candidates=pool,
                   members=sorted(members), dropped=[[id, p] for id, p in dropped],
-                  select_by=settings.get("select_by") or "mean", value=value, periods=shared, trials=trials)
+                  select_by=settings.get("select_by") or "mean", value=value, periods=shared, trials=trials,
+                  left_out=[[id, why] for id, why in left_out])
     print(f"{winner} is BEST" + (f" (was {best['id']})" if best and best["id"] != winner else "")
           + ". Mark its row BEST and the old one KEEP.")
     return 0

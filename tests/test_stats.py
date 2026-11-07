@@ -149,6 +149,14 @@ class ConfidenceSet(unittest.TestCase):
         self.assertEqual(sorted(stats.confidence_set({"a": a, "twin": twin}, 3.0)[0]), ["a", "twin"])
         self.assertEqual(stats.confidence_set({"a": a}, 3.0), (["a"], []))
 
+    def test_short_or_misaligned_series(self):
+        rng = random.Random(3)
+        a = [1.0 + rng.gauss(0, 1) for _ in range(60)]
+        b = [rng.gauss(0, 1) for _ in range(60)]
+        self.assertEqual(sorted(stats.confidence_set({"a": a, "b": b}, 15.0)[0]), ["a", "b"])  # 4 blocks: keep both
+        with self.assertRaises(ValueError):
+            stats.confidence_set({"a": a, "b": b[:50]}, 1.0)
+
     def test_equal_candidates_rarely_lose_one(self):
         lost = 0
         for seed in range(20):

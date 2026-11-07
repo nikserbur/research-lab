@@ -21,7 +21,7 @@ import re
 import stat
 import sys
 
-from _common import emit, home, read_payload
+from _common import emit, home, read_payload, segments
 
 TOOLS = {"Read", "Grep", "Bash", "Edit", "Write", "MultiEdit", "NotebookEdit"}
 KINDS = re.compile(r'"kind": "(protect|release|holdout_open|holdout_close)"')
@@ -75,7 +75,12 @@ def in_shell(command: str, path: pathlib.Path, root: pathlib.Path, cwd: pathlib.
     names = {str(path)}
     if str(path).startswith("/private/"):  # macOS: /tmp and /var are links into /private
         names.add(str(path)[len("/private"):])
-    for base in (root, root.resolve(), cwd, cwd.resolve()):
+    here, folders = cwd, []
+    for tokens in segments(command):  # `cd data/holdout && cat prices.csv` names it from there
+        if tokens[0] == "cd" and len(tokens) > 1:
+            here = (here / os.path.expanduser(tokens[1])).resolve()
+            folders.append(here)
+    for base in (root, root.resolve(), cwd, cwd.resolve(), *folders):
         try:
             rel = path.relative_to(base.resolve())
         except ValueError:

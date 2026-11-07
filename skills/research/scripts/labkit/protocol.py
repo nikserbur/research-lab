@@ -159,7 +159,7 @@ def cmd_close(a) -> int:
     if holdout.look_open(ledger):
         return fail("a holdout look is open; close it first")
     best, looked = current_best(ledger), {e.get("id") for e in ledger.find("holdout_open")}
-    unlooked = best and best["id"] not in looked and not ledger.find("holdout_close")
+    unlooked = bool(best) and best["id"] not in looked  # a look at another id does not validate this one
     if unlooked and not (a.without_look or "").strip():
         return fail(f"{best['id']} is BEST and was never looked at on the holdout; closing now says it is not "
                     "validated: give the reason with --without-look TEXT (it goes into the ledger)")
@@ -632,6 +632,8 @@ def cmd_holdout(a) -> int:
     if not a.id:
         return fail(f"holdout {a.action} needs an experiment id")
     if a.action == "open":
+        if closed(ledger):
+            return fail(f"the research is closed ({closed(ledger)['reason']}); `lab.py close --reopen` first")
         if protocol_problem(ledger):
             return fail(protocol_problem(ledger))
         if opens and a.budget and a.budget != budget:

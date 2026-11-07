@@ -6,6 +6,26 @@ All notable changes to this project are documented here. The format follows
 with every release, or plugin users will not receive the update. Up to 0.3.1 the project was
 called autolearn.
 
+## [0.12.1] - 2026-11-08
+
+What an independent review of 0.12.0 found.
+
+### Fixed
+- A `--select-by` metric the candidates do not write crashed `best` for the life of the research
+  (settings are fixed): such a candidate is now ineligible, with the reason.
+- `close` asked for `--without-look` only when no holdout look had happened at all; a look at another
+  candidate no longer counts for the BEST.
+- One candidate on other periods, or with a changed scores file, blocked the selection for all: it is
+  left out of that selection and named; the longest series set the shared periods.
+- A closed research still took reviews, selections and looks; it takes none until `--reopen`, and
+  `status` shows a reopening.
+- A scenario declared after a candidate's registration did not apply to it: `best` checks the
+  registered criterion too.
+- The confidence set dropped equal candidates too often on short series (19.5% at 60 periods in
+  blocks of 15): with fewer than 20 blocks it keeps them all; series of different lengths raise; the
+  block is estimated per candidate, within its cap.
+- The holdout guard follows `cd` inside a command (`cd data/holdout && cat prices.csv`).
+
 ## [0.12.0] - 2026-11-08
 
 What the second end-to-end run (60 stocks from a hidden generator, see docs/e2e-run-2.md) and an

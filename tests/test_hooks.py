@@ -242,6 +242,8 @@ class ResearchGuard(HookCase):
         self.assertEqual(self.call("Bash", command="python3 tools/build.py --raw data/raw/holdout_b.csv"), "allow")
         self.assertEqual(self.call("Bash", command="cat holdout_b.csv"), "allow")  # not the folder the holdout is in
         self.assertEqual(self.call("Bash", command="cat ./data/holdout_b.csv"), "deny")
+        self.assertEqual(self.call("Bash", command="cd data && head -3 holdout_b.csv"), "deny")
+        self.assertEqual(self.call("Bash", command="cd tools && head -3 holdout_b.csv"), "allow")
 
     def test_a_path_written_through_a_link_is_still_the_path(self):
         self.ledger([{"kind": "protect", "paths": ["/private/var/research/hold"]}])

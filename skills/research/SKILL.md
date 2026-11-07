@@ -278,7 +278,8 @@ conflicts with the evidence or the next step costs far more than the program all
    two rounds in a row bring nothing and `LAB next` has no branch left worth growing (say so and
    propose a change of direction). Record it: `LAB close --lab <folder> --reason <the rule>`; with a BEST
    that was never looked at, `--without-look <why>` is required, because closing then says the edge is
-   not validated.
+   not validated. A closed research takes no registration, run, review, selection or look until
+   `LAB close --reopen --reason <why>`, which stays in the record.
 3. Write `<folder>/BRIEF_<date>.md`, outside `KB/` (results, the best variant with its deflated
    Sharpe and interval, the number of trials and discoveries from `LAB fdr`, what is proven and what
    is not, next steps). `LAB brief --lab <folder> <brief>` must pass: every

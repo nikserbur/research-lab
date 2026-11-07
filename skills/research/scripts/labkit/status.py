@@ -121,6 +121,10 @@ def summary(lab: pathlib.Path) -> list:
     lines.append(f"- Discrepancies recorded: {discrepancies}")
     from .protocol import closed
     shut = closed(ledger)
+    reopened = ledger.find("reopen")
+    if reopened and not shut:
+        lines.append(f"- Reopened on {reopened[-1]['ts'][:10]}: {reopened[-1]['reason']} "
+                     f"({len(ledger.find('close'))} close(s) before)")
     if shut:
         lines.append(f"- Closed on {shut['ts'][:10]}: {shut['reason']}"
                      + (f" ({shut['best']} not looked at on the holdout: {shut['without_look']})" if shut.get("without_look") else ""))

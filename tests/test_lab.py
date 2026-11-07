@@ -511,6 +511,45 @@ class Protocol(ProtocolCase):
         self.assertIn("E1 is BEST", self.p("best"))
         self.assertIn("verification requirements are not proven", self.p("holdout", "open", "E1", expect=1))
 
+    def test_a_select_by_metric_a_candidate_lacks_makes_it_ineligible_not_a_crash(self):
+        self.p("settings", "--select-by", "sharpee")
+        self.assertIn("has no sharpee", self.make_best("E1", 0.5, 1, expect=1))
+
+    def test_a_scenario_set_after_registration_keeps_the_old_criterion_out(self):
+        self.p("register", "E1")
+        self.p("settings", "--scenarios", "stress")
+        self.series("E1", 0.5, 1)
+        self.p("judge", "E1")
+        self.p("review", "E1", "--verdict", "PASS", "--round", "R01")
+        self.assertIn("no clause on a *_stress metric", self.p("best", "E1", expect=1))
+
+    def test_a_candidate_on_other_periods_is_left_out_not_blocking(self):
+        self.make_best("E1", 0.5, 1)
+        self.row("E2", "net_per_trade > 0 & trades >= 30")
+        self.write("research/toy/KB/expect/E2.md", "x")
+        self.p("register", "E2")
+        out = self.labdir / "results" / "E2"
+        self.p("run", "E2", "--code", str(SERIES), "--", sys.executable, str(SERIES), str(out), "0.9", "2", "40")
+        self.p("judge", "E2")
+        self.p("review", "E2", "--verdict", "PASS", "--round", "R01")
+        said = self.p("best", expect=None)
+        self.assertIn("E2 left out of this selection", said)
+        self.assertIn("E1 is BEST", said)
+
+    def test_closing_freezes_the_decisions_and_a_look_elsewhere_does_not_count(self):
+        self.make_best("E1", 0.5, 1)
+        self.make_best("E3", 1.5, 4)
+        sys.path.insert(0, str(LAB.parent))
+        from labkit.ledger import Ledger
+        Ledger(self.labdir).append("holdout_open", id="E1", candidate="c", budget=1, look=1, by="x")
+        Ledger(self.labdir).append("holdout_close", id="E1", verdict="PASS", look=1, metrics={})
+        self.assertIn("--without-look", self.p("close", "--reason", "stop", expect=1))
+        self.p("close", "--reason", "stop", "--without-look", "E3 came after the look")
+        for args in (("best",), ("review", "E3", "--verdict", "PASS", "--round", "R02"), ("holdout", "open", "E3")):
+            self.assertIn("the research is closed", self.p(*args, expect=1))
+        self.p("close", "--reopen", "--reason", "one more look")
+        self.assertIn("Reopened on", self.p("status"))
+
     def test_within_the_confidence_set_the_declared_metric_chooses(self):
         self.assertIn("select_by -trades", self.p("settings", "--select-by=-trades"))
         self.make_best("E1", 0.5, 1)

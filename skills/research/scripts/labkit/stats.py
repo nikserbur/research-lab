@@ -171,11 +171,16 @@ def confidence_set(series: dict, block: float, alpha: float = 0.05, draws: int =
     """Hansen, Lunde and Nason's model confidence set for the highest mean (Econometrica 2011): drop the
     worst candidate while the T_max test says they are not all equal, with one stationary block bootstrap
     of the shared periods for every series (the same draws, so their dependence on each other is kept).
-    (members, [(id, p), ...] in the order they were dropped). Higher values are better."""
+    (members, [(id, p), ...] in the order they were dropped). Higher values are better. With fewer than
+    20 blocks of periods nothing is dropped: the bootstrap standard error is too small there."""
     ids = list(series)
     if len(ids) < 2:
         return ids, []
     n = len(series[ids[0]])
+    if any(len(v) != n for v in series.values()):
+        raise ValueError("the series must cover the same periods, in the same order")
+    if n / max(block, 1.0) < 20:  # too few independent blocks: the bootstrap se is too small, so keep them all
+        return ids, []
     prefix = {}
     for id in ids:
         sums = [0.0]
