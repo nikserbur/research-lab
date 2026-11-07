@@ -354,8 +354,8 @@ class Protocol(ProtocolCase):
         lines = ledger.read_text().splitlines()
         ledger.write_text("\n".join(lines[:-1]) + "\n")
         self.assertIn("the end of the ledger was edited or removed", self.p("check", expect=1))
-        ledger.write_text("\n".join([lines[0].replace("abc", "xyz")] + lines[1:]) + "\n")
-        self.assertIn("ledger line 2 (run_start E1) does not follow line 1", self.p("check", expect=1))
+        ledger.write_text("\n".join(lines[:1] + [lines[1].replace("abc", "xyz")] + lines[2:]) + "\n")  # line 1 fixes the protocol
+        self.assertIn("ledger line 3 (run_start E1) does not follow line 2", self.p("check", expect=1))
         ledger.write_text("\n".join(lines[:1] + ["not json", "[1, 2]"] + lines[1:]) + "\n")
         out = self.p("check", expect=1)
         self.assertIn("line 2 is not a ledger entry", out)
@@ -780,6 +780,22 @@ class Protocol(ProtocolCase):
         self.assertIn("0 trials, 2 control runs", out)
         self.row("C0", "net_per_trade < 1", decision="KEEP")  # round 1 now: a trial in disguise
         self.assertIn("C0: ran as a control but its round is now 1", self.p("check", expect=1))
+
+    def test_exploration_counts_as_trials(self):
+        self.assertIn("--n: the number of configurations", self.p("explore", "--n", "0", "--what", "x", expect=1))
+        self.assertIn("60 trials so far", self.p("explore", "--n", "60", "--what", "R01 review re-runs"))
+        self.p("register", "E1")
+        self.assertIn("61 trials so far", self.series("E1", 0.5, 1))
+        self.assertIn("(61 trials (60 from exploration)", self.p("check"))
+
+    def test_the_protocol_is_fixed_for_the_life_of_a_research(self):
+        self.p("register", "E1")
+        sys.path.insert(0, str(LAB.parent))
+        from labkit.ledger import Ledger
+        Ledger(self.labdir).append("protocol", sha="0123456789abcdef", reason="an older research-lab")
+        self.assertIn("protocol code changed", self.series("E1", 0.5, 1, expect=1))
+        self.assertIn("-> ", self.p("upgrade", "--reason", "the deflated Sharpe fix"))
+        self.assertIn("E1: exit 0", self.series("E1", 0.5, 1))
 
     def test_the_candidate_includes_the_command(self):
         self.p("register", "E1")

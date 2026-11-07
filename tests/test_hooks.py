@@ -237,6 +237,12 @@ class ResearchGuard(HookCase):
         finally:
             os.chmod(self.holdout, 0o644)
 
+    def test_a_file_with_the_holdout_name_elsewhere_passes(self):
+        (self.repo / "data" / "raw").mkdir()
+        self.assertEqual(self.call("Bash", command="python3 tools/build.py --raw data/raw/holdout_b.csv"), "allow")
+        self.assertEqual(self.call("Bash", command="cat holdout_b.csv"), "allow")  # not the folder the holdout is in
+        self.assertEqual(self.call("Bash", command="cat ./data/holdout_b.csv"), "deny")
+
     def test_a_path_written_through_a_link_is_still_the_path(self):
         self.ledger([{"kind": "protect", "paths": ["/private/var/research/hold"]}])
         self.assertEqual(self.call("Bash", command="ls /var/research/hold/2026"), "deny")

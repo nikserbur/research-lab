@@ -22,7 +22,8 @@ import statistics
 
 from . import stats
 from .ledger import Ledger, read_metrics, sha256_file, text_lines
-from .protocol import bad_id, current_best, fail, is_control, journal, judged_latest, latest_run, trial_count
+from .protocol import (bad_id, current_best, fail, is_control, journal, judged_latest, latest_run, protocol_problem,
+                       trial_count)
 
 MIN_PERIODS = 20
 MIN_DSR = 0.95
@@ -276,6 +277,8 @@ def cmd_best(a) -> int:
     if bad_id(a):
         return 1
     ledger = Ledger(a.lab)
+    if protocol_problem(ledger):
+        return fail(protocol_problem(ledger))
     run, test = tested(ledger, a.id)
     problems = []
     if is_control(a.lab, a.id) or (run and run.get("control")):

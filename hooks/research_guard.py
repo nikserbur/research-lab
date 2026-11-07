@@ -6,7 +6,7 @@ The protection itself is the file mode: `lab.py holdout protect PATH` records th
 LEDGER.jsonl and takes every permission away from them, so no program run as this user can open them,
 a helper script or a glob included. This hook is the second layer: when a call names a protected file
 (a path argument at it or inside it, a search above it while it is readable, or the file's path in a
-shell command), it refuses with the reason, before the call fails on permissions or, on Windows, where modes do not
+shell command, absolute or relative to the project or the working folder), it refuses with the reason, before the call fails on permissions or, on Windows, where modes do not
 protect reads, instead of succeeding. It cannot see a path a program builds at run time.
 
 Ledgers come from <project>/research/*/ and from the list `lab.py holdout protect` keeps in the data
@@ -68,26 +68,26 @@ def protected(ledger: pathlib.Path) -> tuple:
     return [pathlib.Path(p) for p in paths], opens > closes
 
 
-def in_shell(command: str, path: pathlib.Path, root: pathlib.Path) -> bool:
-    """The command names the file: its absolute or project-relative path, or, for a file with an
-    extension, its name as a whole token. A bare folder name is too common a word to refuse on."""
+def in_shell(command: str, path: pathlib.Path, root: pathlib.Path, cwd: pathlib.Path) -> bool:
+    """The command names the file by a path: absolute, or relative to the project or to the folder the
+    command runs in. A bare file name is not enough: data/raw/prices.csv and data/holdout/prices.csv
+    share one, and refusing the simulation data would stop the research (the file mode guards the rest)."""
     names = {str(path)}
     if str(path).startswith("/private/"):  # macOS: /tmp and /var are links into /private
         names.add(str(path)[len("/private"):])
-    for base in (root, root.resolve()):
+    for base in (root, root.resolve(), cwd, cwd.resolve()):
         try:
-            names.add(path.relative_to(base.resolve()).as_posix())
-            names.add(str(base / path.relative_to(base.resolve())))
+            rel = path.relative_to(base.resolve())
         except ValueError:
-            pass
-    if "." in path.name:
-        names.add(path.name)
+            continue
+        names.add(rel.as_posix())
+        names.add(str(base / rel))
     return any(re.search(rf"(?<![\w.-]){re.escape(n)}(?![\w-]|\.\w)", command) for n in names)
 
 
 def touches(tool: str, args: dict, cwd: pathlib.Path, root: pathlib.Path, path: pathlib.Path) -> bool:
     if tool == "Bash":
-        return in_shell(str(args.get("command") or ""), path, root)
+        return in_shell(str(args.get("command") or ""), path, root, cwd)
     for key in ("file_path", "path", "notebook_path"):
         value = args.get(key)
         if not isinstance(value, str) or not value or "\x00" in value:

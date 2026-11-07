@@ -88,11 +88,63 @@ def live(lab: pathlib.Path, start: dict) -> bool:
 
 
 def trial_count(ledger: Ledger) -> int:
-    """Every start is a trial, interrupted ones included, and a sweep inside a run counts as its size.
-    Controls (round 0: do nothing, a shuffled target, a known case) test the environment, not an idea,
-    and are not counted."""
+    """Every start is a trial, interrupted ones included, a sweep inside a run counts as its size, and
+    so do the configurations judged against outcomes outside `lab.py run` (recon, a reviewer's re-runs,
+    a scout's checks), recorded with `lab.py explore`. Controls (round 0: do nothing, a shuffled target,
+    a known case) test the environment, not an idea, and are not counted."""
     return sum(1 for e in ledger.find("run_start") if not e.get("control")) + sum(
-        max(0, int(e.get("configs") or 1) - 1) for e in ledger.find("stats") if not e.get("control"))
+        max(0, int(e.get("configs") or 1) - 1) for e in ledger.find("stats") if not e.get("control")) + explored(ledger)
+
+
+def explored(ledger: Ledger) -> int:
+    return sum(int(e.get("n") or 0) for e in ledger.find("explore"))
+
+
+SCRIPTS = pathlib.Path(__file__).resolve().parent.parent
+
+
+def protocol_hash() -> str:
+    """The code that decides: lab.py and labkit. A research keeps the one it started with."""
+    files = [SCRIPTS / "lab.py", *sorted((SCRIPTS / "labkit").glob("*.py"))]
+    return sha256_bytes(b"".join(f.name.encode() + b"\0" + f.read_bytes() for f in files))[:16]
+
+
+def protocol_problem(ledger: Ledger) -> str:
+    """'' while the research runs on the protocol it fixed; the first command that needs one fixes it."""
+    fixed, now = ledger.last("protocol"), protocol_hash()
+    if not fixed:
+        ledger.append("protocol", sha=now, reason="first use")
+        return ""
+    if fixed.get("sha") != now:
+        return (f"research-lab's protocol code changed since this research fixed it ({fixed.get('sha')} -> {now}), "
+                "so its results would mix two protocols; if the change is meant: "
+                "lab.py upgrade --lab DIR --reason TEXT")
+    return ""
+
+
+def cmd_upgrade(a) -> int:
+    ledger = Ledger(a.lab)
+    if not (a.reason or "").strip():
+        return fail("upgrade needs --reason: what changed in research-lab and why this research takes it")
+    fixed, now = ledger.last("protocol"), protocol_hash()
+    if fixed and fixed.get("sha") == now:
+        print(f"the protocol is {now} already")
+        return 0
+    ledger.append("protocol", sha=now, previous=(fixed or {}).get("sha", ""), reason=a.reason.strip())
+    print(f"protocol {(fixed or {}).get('sha', '-')} -> {now}: {a.reason.strip()}")
+    return 0
+
+
+def cmd_explore(a) -> int:
+    ledger = Ledger(a.lab)
+    if not 1 <= a.n <= 100_000:
+        return fail("--n: the number of configurations judged against outcomes, from 1 to 100000")
+    if not (a.what or "").strip():
+        return fail("--what: what was looked at (script, folder), so the count can be checked")
+    ledger.append("explore", n=a.n, what=a.what.strip(), by=a.by)
+    print(f"recorded {a.n} configurations judged outside lab.py run ({a.what.strip()}); "
+          f"{trial_count(ledger)} trials so far: every deflated Sharpe from now on counts them")
+    return 0
 
 
 def control_count(ledger: Ledger) -> int:
@@ -144,6 +196,8 @@ def cmd_register(a) -> int:
     if bad_id(a):
         return 1
     ledger, row = Ledger(a.lab), journal(a.lab).get(a.id)
+    if protocol_problem(ledger):
+        return fail(protocol_problem(ledger))
     if row is None:
         return fail(f"no row {a.id} in KB/EXPERIMENTS.tsv: write it first")
     lines = [line for line in (a.lab / "KB" / "EXPERIMENTS.tsv").read_text(encoding="utf-8").split("\n") if line.strip()]
@@ -176,6 +230,8 @@ def cmd_run(a) -> int:
         return fail("usage: lab.py run --lab DIR ID --code F [--code F ...] [--config F] [--data F] -- COMMAND ...; "
                     "--code names the files that make the candidate, so its hash means something")
     ledger = Ledger(a.lab)
+    if protocol_problem(ledger):
+        return fail(protocol_problem(ledger))
     problems = edits(a.lab, ledger, a.id)
     if problems:
         return fail(f"{a.id}: " + "; ".join(problems))
@@ -456,7 +512,8 @@ def cmd_check(a) -> int:
         warnings.append(f"{recorded_best['id']} is BEST in the ledger; mark its row BEST")
     judged = [e["verdict"] for e in ledger.find("judge")]
     tests = ledger.find("stats")
-    print(f"{len(registered)} registered, {len(ledger.find('run_start'))} runs ({trial_count(ledger)} trials, "
+    print(f"{len(registered)} registered, {len(ledger.find('run_start'))} runs ({trial_count(ledger)} trials"
+          + (f" ({explored(ledger)} from exploration)" if explored(ledger) else "") + ", "
           f"{control_count(ledger)} control runs), "
           f"{judged.count('PASS')} PASS / {judged.count('FAIL')} FAIL / {judged.count('CRASH')} CRASH, "
           f"{len(tests)} tested ({sum(e['discovery'] for e in tests)} discoveries), "
@@ -531,6 +588,8 @@ def cmd_holdout(a) -> int:
     if not a.id:
         return fail(f"holdout {a.action} needs an experiment id")
     if a.action == "open":
+        if protocol_problem(ledger):
+            return fail(protocol_problem(ledger))
         if opens and a.budget and a.budget != budget:
             return fail(f"the look budget was fixed at {budget} by the first look")
         if not 1 <= budget <= MAX_LOOKS:
