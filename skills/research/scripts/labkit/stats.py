@@ -167,6 +167,55 @@ def bootstrap(xs: list, block: float, draws: int = 2000, seed: int = 0, level: f
             "se": se, "draws": draws}
 
 
+def confidence_set(series: dict, block: float, alpha: float = 0.05, draws: int = 1000, seed: int = 0) -> tuple:
+    """Hansen, Lunde and Nason's model confidence set for the highest mean (Econometrica 2011): drop the
+    worst candidate while the T_max test says they are not all equal, with one stationary block bootstrap
+    of the shared periods for every series (the same draws, so their dependence on each other is kept).
+    (members, [(id, p), ...] in the order they were dropped). Higher values are better."""
+    ids = list(series)
+    if len(ids) < 2:
+        return ids, []
+    n = len(series[ids[0]])
+    prefix = {}
+    for id in ids:
+        sums = [0.0]
+        for x in series[id] + series[id]:
+            sums.append(sums[-1] + x)
+        prefix[id] = sums
+    rng, restart = random.Random(seed), 1 / max(block, 1.0)
+    log_stay = math.log(1 - restart) if restart < 1 else None
+    boot = {id: [] for id in ids}
+    for _ in range(draws):
+        segments, left = [], n
+        while left:
+            start = rng.randrange(n)
+            length = 1 if log_stay is None else 1 + int(math.log(1 - rng.random()) / log_stay)
+            segments.append((start, min(length, left)))
+            left -= segments[-1][1]
+        for id in ids:
+            p = prefix[id]
+            boot[id].append(sum(p[s + k] - p[s] for s, k in segments) / n)
+    mean = {id: fmean(series[id]) for id in ids}
+    members, dropped = list(ids), []
+    while len(members) > 1:
+        avg = fmean([mean[i] for i in members])
+        rel = {i: mean[i] - avg for i in members}
+        avg_b = [fmean([boot[i][b] for i in members]) for b in range(draws)]
+        rel_b = {i: [boot[i][b] - avg_b[b] for b in range(draws)] for i in members}
+        se = {i: statistics_stdev(rel_b[i]) for i in members}
+        worse = {i: -rel[i] / se[i] if se[i] > 0 else 0.0 for i in members}
+        t_max = max(worse.values())
+        null = [max(-(rel_b[i][b] - rel[i]) / se[i] for i in members if se[i] > 0) if any(se.values()) else 0.0
+                for b in range(draws)]
+        p = sum(1 for x in null if x >= t_max) / draws
+        if p >= alpha:
+            break
+        out = max(members, key=lambda i: worse[i])
+        members.remove(out)
+        dropped.append((out, p))
+    return members, dropped
+
+
 def statistics_stdev(xs: list) -> float:
     mean = fmean(xs)
     return math.sqrt(sum((x - mean) ** 2 for x in xs) / (len(xs) - 1)) if len(xs) > 1 else 0.0

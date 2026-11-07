@@ -17,14 +17,18 @@ Protocol (state lives in <lab>/LEDGER.jsonl, append-only and hash-chained; <lab>
 Selection (every run is tested as it ends on results/ID/scores.tsv, or daily.tsv: a `period` column, one row per
 case such as a day, a test cycle or an episode, and the score column):
     lab.py settings --lab DIR [--column pnl] [--block auto|N] [--alpha 0.05] [--run-timeout S] [--max-trials N]
-                     [--max-controls N]
+                     [--max-controls N] [--scenarios stress,...]
+                     [--select-by METRIC]
                                                      fixed for the whole research, before its first run
     lab.py stats --lab DIR ID                        the recorded test of the latest run: deflated Sharpe after N
                                                      trials, block-bootstrap p and interval, LORD++ decision
-    lab.py compare --lab DIR NEW OLD                 paired on the same periods: better outside the interval? (once)
+    lab.py compare --lab DIR NEW OLD                 paired on the same periods: better outside the interval? (once;
+                                                     a diagnostic: BEST comes from the selection)
     lab.py review --lab DIR ID --verdict PASS|BLOCK --round R03
                                                      the reviewer's verdict on the latest run
-    lab.py best --lab DIR ID                         PASS, reviewer PASS, a discovery, DSR >= 0.95, beats the best
+    lab.py best --lab DIR [ID]                       one selection over every candidate with a PASS, a reviewer
+                                                     PASS, a discovery and DSR >= 0.95: the model confidence set
+                                                     of their scores, then --select-by (settings) within it
     lab.py fdr --lab DIR                             every test with its LORD++ decision and Benjamini-Yekutieli by round
     lab.py explore --lab DIR --n N --what TEXT       configurations judged outside lab.py run (recon, a reviewer's
                                                      re-runs): they count as trials for every later deflated Sharpe
@@ -395,6 +399,8 @@ def main(argv=None) -> int:
     s.add_argument("--run-timeout", type=int)
     s.add_argument("--max-trials", type=int)
     s.add_argument("--max-controls", type=int)
+    s.add_argument("--scenarios", help="stress scenarios every criterion must hold under, e.g. stress (metrics *_stress)")
+    s.add_argument("--select-by", help="how BEST is chosen within the confidence set: a metric (higher is better, -metric lower)")
     s = with_lab(sub, "explore")
     s.add_argument("--n", type=int, required=True, help="configurations judged against outcomes")
     s.add_argument("--what", required=True)
@@ -408,8 +414,8 @@ def main(argv=None) -> int:
     s.add_argument("--from", dest="ref")
     s.add_argument("--repo", help="the project's repository, when the research folder is not inside it")
     s.add_argument("--force", action="store_true")
-    for name in ("stats", "best"):
-        with_lab(sub, name).add_argument("id")
+    with_lab(sub, "stats").add_argument("id")
+    with_lab(sub, "best").add_argument("id", nargs="?", help="the candidate you expect; the selection decides")
     s = with_lab(sub, "compare")
     s.add_argument("new")
     s.add_argument("old")

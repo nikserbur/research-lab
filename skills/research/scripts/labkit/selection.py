@@ -28,7 +28,8 @@ from .protocol import (bad_id, current_best, fail, is_control, journal, judged_l
 MIN_PERIODS = 20
 MIN_DSR = 0.95
 MAX_ALPHA = 0.1
-DEFAULTS = {"column": "pnl", "block": "auto", "alpha": 0.05, "run_timeout": None, "max_trials": None, "max_controls": 10}
+DEFAULTS = {"column": "pnl", "block": "auto", "alpha": 0.05, "run_timeout": None, "max_trials": None, "max_controls": 10,
+            "scenarios": "", "select_by": ""}
 VERDICTS = ("PASS", "BLOCK")
 
 
@@ -178,11 +179,17 @@ def cmd_settings(a) -> int:
            "alpha": a.alpha if a.alpha is not None else current["alpha"],
            "run_timeout": a.run_timeout if a.run_timeout is not None else current["run_timeout"],
            "max_trials": a.max_trials if a.max_trials is not None else current["max_trials"],
-           "max_controls": a.max_controls if a.max_controls is not None else current["max_controls"]}
+           "max_controls": a.max_controls if a.max_controls is not None else current["max_controls"],
+           "scenarios": a.scenarios if a.scenarios is not None else current["scenarios"],
+           "select_by": a.select_by if a.select_by is not None else current["select_by"]}
     if new["run_timeout"] is not None and not 1 <= new["run_timeout"] <= 7 * 86400:
         return fail("run-timeout: seconds per run, from 1 to a week")
     if new["max_trials"] is not None and not 1 <= new["max_trials"] <= 100_000:
         return fail("max-trials: from 1 to 100000")
+    if new["select_by"] and not re.fullmatch(r"-?[A-Za-z_][\w.]*", new["select_by"]):
+        return fail("select-by: a metric of metrics.tsv, higher is better; -metric for lower is better")
+    if new["scenarios"] and not re.fullmatch(r"[a-z][a-z0-9]*(,[a-z][a-z0-9]*)*", new["scenarios"]):
+        return fail("scenarios: names like stress or stress,borrow (lower case, comma-separated)")
     if not 0 <= new["max_controls"] <= 100:
         return fail("max-controls: from 0 to 100 (controls spend no trial, so they are capped apart)")
     if not re.fullmatch(r"[A-Za-z_][\w.]*", new["column"]):
@@ -273,41 +280,105 @@ def reviewed(ledger: Ledger, id: str) -> bool:
     return bool(run and review and review["run_seq"] == run["seq"] and review["verdict"] == "PASS")
 
 
-def cmd_best(a) -> int:
-    if bad_id(a):
-        return 1
-    ledger = Ledger(a.lab)
-    if protocol_problem(ledger):
-        return fail(protocol_problem(ledger))
-    run, test = tested(ledger, a.id)
+def problems_of(lab: pathlib.Path, ledger: Ledger, id: str, trials: int) -> list:
+    """Why `id` cannot take part in the selection of BEST (empty when it can)."""
+    run, test = tested(ledger, id)
+    if is_control(lab, id) or (run and run.get("control")):
+        return ["it is a control (round 0): it tests the environment and is never a candidate"]
     problems = []
-    if is_control(a.lab, a.id) or (run and run.get("control")):
-        return fail(f"{a.id} is a control (round 0): it tests the environment and is never a candidate")
-    if not judged_latest(ledger, a.id):
+    if not judged_latest(ledger, id):
         problems.append("its latest run is not judged PASS")
-    if not reviewed(ledger, a.id):
+    if not reviewed(ledger, id):
         problems.append("no reviewer PASS for its latest run (`lab.py review`)")
     if not test or test.get("sharpe") is None:
         problems.append("its latest run has no tested series")
     else:
         if not test["discovery"]:
             problems.append(f"not a discovery under LORD++ (p {test['p']:.2e} against level {test['lord_level']:.2e})")
-        trials = trial_count(ledger)
         if dsr_now(test, trials) < MIN_DSR:
             problems.append(f"deflated Sharpe {dsr_now(test, trials):.3f} is below {MIN_DSR} after {max(trials, test['trials'])} trials")
+    return problems
+
+
+def eligible(lab: pathlib.Path, ledger: Ledger) -> dict:
+    """{id: (run, test)} of every candidate the selection of BEST takes."""
+    trials = trial_count(ledger)
+    ids = [e["id"] for e in ledger.find("register") if isinstance(e.get("id"), str)]
+    return {id: tested(ledger, id) for id in ids if not problems_of(lab, ledger, id, trials)}
+
+
+def choose(lab: pathlib.Path, ledger: Ledger, cands: dict, settings: dict):
+    """(winner, members, dropped, value) or (None, error): the model confidence set of the candidates'
+    score series on their shared periods, then the highest `select_by` within it (the mean score unless
+    the research named a metric before its first run; a leading - means lower is better)."""
+    series = {}
+    for id, (run, test) in cands.items():
+        path = series_file(lab, id)
+        if sha256_file(path) != test["daily_sha"]:
+            return None, f"{path} changed after its run was tested"
+        series[id] = read_series(path, settings["column"])
+    shared = [k for k in series[next(iter(series))] if all(k in v for v in series.values())]
+    if len(shared) < MIN_PERIODS:
+        return None, f"the candidates share {len(shared)} periods; at least {MIN_PERIODS} are needed to choose between them"
+    values = {id: [v[k] for k in shared] for id, v in series.items()}
+    spread = [x - fmean_of(values, t) for id in values for t, x in enumerate(values[id])]
+    block = block_for(spread, settings["block"]) if len(cands) > 1 else 1.0
+    members, dropped = stats.confidence_set(values, block, settings["alpha"])
+    key = (settings.get("select_by") or "").strip()
+    def value(id):
+        if not key:
+            return statistics.fmean(values[id])
+        metrics = read_metrics(lab / "results" / id / "metrics.tsv")
+        name, sign = (key[1:], -1) if key.startswith("-") else (key, 1)
+        return sign * metrics.get(name, float("-inf") * sign)
+    order = {e["id"]: e["seq"] for e in ledger.find("register")}
+    winner = max(members, key=lambda id: (value(id), -order.get(id, 0)))
+    return winner, (members, dropped, value(winner), len(shared))
+
+
+def fmean_of(values: dict, t: int) -> float:
+    return statistics.fmean(v[t] for v in values.values())
+
+
+def cmd_best(a) -> int:
+    ledger = Ledger(a.lab)
+    if protocol_problem(ledger):
+        return fail(protocol_problem(ledger))
+    trials = trial_count(ledger)
+    if a.id:
+        if bad_id(a):
+            return 1
+        problems = problems_of(a.lab, ledger, a.id, trials)
+        if problems:
+            return fail(f"{a.id} cannot be BEST: " + "; ".join(problems))
+    cands = eligible(a.lab, ledger)
+    if not cands:
+        return fail("no candidate can be BEST yet: each needs a judge PASS and a reviewer PASS on its latest run, "
+                    f"a LORD++ discovery and a deflated Sharpe of {MIN_DSR} after the trials so far")
+    settings = research_settings(ledger)
+    winner, detail = choose(a.lab, ledger, cands, settings)
+    if winner is None:
+        return fail(detail)
+    members, dropped, value, shared = detail
+    if a.id and a.id != winner:
+        return fail(f"{a.id} cannot be BEST: the selection over all {len(cands)} candidates picks {winner} "
+                    f"(confidence set {', '.join(sorted(members))}; chosen by {settings.get('select_by') or 'the mean score'})")
     best = current_best(ledger)
-    if best and best["id"] != a.id:
-        old_run = latest_run(ledger, best["id"])
-        cmp = next((e for e in ledger.find("compare", a.id) if e["old"] == best["id"] and run and old_run
-                    and e["run_seq"] == run["seq"] and e["old_run_seq"] == old_run["seq"]), None)
-        if not cmp:
-            problems.append(f"not compared with the current best {best['id']}: lab.py compare {a.id} {best['id']}")
-        elif cmp["verdict"] != "BETTER":
-            problems.append(f"not better than {best['id']} outside the interval ({cmp['lo']:.4g} to {cmp['hi']:.4g})")
-    if problems:
-        return fail(f"{a.id} cannot be BEST: " + "; ".join(problems))
-    ledger.append("best", id=a.id, run_seq=run["seq"], previous=best["id"] if best else "")
-    print(f"{a.id} is BEST" + (f" (was {best['id']})" if best else "") + ". Mark its row BEST and the old one KEEP.")
+    run = cands[winner][0]
+    pool = sorted([id, cands[id][0]["seq"]] for id in cands)
+    print(f"{len(cands)} candidates on {shared} shared periods: {', '.join(sorted(cands))}")
+    for id, p in dropped:
+        print(f"  {id} left the confidence set (p {p:.3f})")
+    print(f"  confidence set at alpha {settings['alpha']:g}: {', '.join(sorted(members))}; chosen by "
+          f"{settings.get('select_by') or 'the mean score'}")
+    if best and best["id"] == winner and best["run_seq"] == run["seq"] and best.get("candidates") == pool:
+        print(f"{winner} is BEST already")
+        return 0
+    ledger.append("best", id=winner, run_seq=run["seq"], previous=best["id"] if best else "", candidates=pool,
+                  members=sorted(members), dropped=[[id, p] for id, p in dropped],
+                  select_by=settings.get("select_by") or "mean", value=value, periods=shared, trials=trials)
+    print(f"{winner} is BEST" + (f" (was {best['id']})" if best and best["id"] != winner else "")
+          + ". Mark its row BEST and the old one KEEP.")
     return 0
 
 

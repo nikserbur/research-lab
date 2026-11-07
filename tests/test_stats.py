@@ -135,5 +135,28 @@ class FalseDiscoveries(unittest.TestCase):
         self.assertLessEqual(found, 2)
 
 
+
+class ConfidenceSet(unittest.TestCase):
+    def test_a_worse_series_leaves_and_equals_stay(self):
+        rng = random.Random(1)
+        a = [0.3 + rng.gauss(0, 1) for _ in range(500)]
+        worse = [x - 0.2 + rng.gauss(0, 0.3) for x in a]  # tied to a, so the gap is measured precisely
+        noise = [rng.gauss(0, 1) for _ in range(500)]
+        members, dropped = stats.confidence_set({"a": a, "worse": worse, "noise": noise}, 3.0)
+        self.assertEqual(members, ["a"])
+        self.assertEqual({d for d, _ in dropped}, {"worse", "noise"})
+        twin = [x + rng.gauss(0, 0.3) for x in a]
+        self.assertEqual(sorted(stats.confidence_set({"a": a, "twin": twin}, 3.0)[0]), ["a", "twin"])
+        self.assertEqual(stats.confidence_set({"a": a}, 3.0), (["a"], []))
+
+    def test_equal_candidates_rarely_lose_one(self):
+        lost = 0
+        for seed in range(20):
+            rng = random.Random(100 + seed)
+            series = {k: [0.1 + rng.gauss(0, 1) for _ in range(300)] for k in "abc"}
+            lost += len(stats.confidence_set(series, 1.0, 0.1, draws=300)[1]) > 0
+        self.assertLessEqual(lost, 5)  # the set keeps all three at 90% about nine times in ten
+
+
 if __name__ == "__main__":
     unittest.main()

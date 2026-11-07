@@ -486,28 +486,37 @@ class Protocol(ProtocolCase):
         self.p("run", "E2", "--code", str(SERIES), "--", sys.executable, str(SERIES), str(out), "0.9", "2", "200")
         self.assertIn("cover different periods", self.p("compare", "E2", "E1", expect=1))
 
-    def test_best_needs_pass_review_significance_and_to_beat_the_current_best(self):
+    def test_best_is_one_selection_over_every_eligible_candidate(self):
         self.p("register", "E1")
-        out = self.series("E1", 0.5, 1)
-        self.assertIn("a discovery", out)
+        self.assertIn("a discovery", self.series("E1", 0.5, 1))
         self.p("judge", "E1")
         self.assertIn("no reviewer PASS for its latest run", self.p("best", "E1", expect=1))
+        self.assertIn("no candidate can be BEST yet", self.p("best", expect=1))
         self.p("review", "E1", "--verdict", "PASS", "--round", "R01")
-        self.assertIn("E1 is BEST", self.p("best", "E1"))
-        self.assertIn("not compared with the current best E1", self.make_best("E2", 0.55, 2, expect=1))
-        first = self.p("compare", "E2", "E1", expect=1)
-        self.assertIn("NOT BETTER", first)
-        self.assertEqual(first, self.p("compare", "E2", "E1", expect=1))  # recorded once, not redrawn
-        self.assertEqual(self.labdir.joinpath("LEDGER.jsonl").read_text().count('"kind": "compare"'), 1)
-        self.assertIn("not better than E1 outside the interval", self.p("best", "E2", expect=1))
-        self.make_best("E3", 1.5, 4, expect=1)
-        self.assertIn("BETTER", self.p("compare", "E3", "E1"))
-        self.assertIn("E3 is BEST (was E1)", self.p("best", "E3"))
+        self.assertIn("E1 is BEST", self.p("best"))
+        self.assertIn("E3 is BEST (was E1)", self.make_best("E3", 1.5, 4))  # no chain of pairwise wins needed
+        self.assertIn("E1 left the confidence set", self.p("best"))  # the same selection, recorded already
+        self.assertIn("picks E3", self.make_best("E2", 1.3, 2, expect=1))
+        first = self.p("compare", "E2", "E3", expect=None)  # a diagnostic now, still recorded once
+        self.assertEqual(first, self.p("compare", "E2", "E3", expect=None))
         self.row("E1", "net_per_trade > 0 & trades >= 30", decision="KEEP BEST")
         self.assertIn("marked BEST but `lab.py best` recorded E3", self.p("check", expect=1))
-        out = self.p("fdr")
-        self.assertIn("E3\t1\t", out)
-        self.assertIn("3 tests", out)
+        self.assertIn("3 tests", self.p("fdr"))
+
+    def test_the_look_waits_for_a_selection_over_the_current_candidates(self):
+        self.protect_holdout()
+        self.make_best("E1", 0.5, 1)
+        self.make_best("E2", 0.2, 2, expect=1)  # eligible, but not chosen: nothing is recorded
+        self.assertIn("`lab.py best` again", self.p("holdout", "open", "E1", expect=1))
+        self.assertIn("E1 is BEST", self.p("best"))
+        self.assertIn("verification requirements are not proven", self.p("holdout", "open", "E1", expect=1))
+
+    def test_within_the_confidence_set_the_declared_metric_chooses(self):
+        self.assertIn("select_by -trades", self.p("settings", "--select-by=-trades"))
+        self.make_best("E1", 0.5, 1)
+        out = self.make_best("E2", 0.52, 2, expect=1)  # a higher mean, the same trades: the earlier one stays
+        self.assertIn("picks E1", out)
+        self.assertIn("chosen by -trades", out)
 
     def test_conclusions_resting_on_an_invalid_run_must_say_so(self):
         self.passed()
@@ -780,6 +789,14 @@ class Protocol(ProtocolCase):
         self.assertIn("0 trials, 2 control runs", out)
         self.row("C0", "net_per_trade < 1", decision="KEEP")  # round 1 now: a trial in disguise
         self.assertIn("C0: ran as a control but its round is now 1", self.p("check", expect=1))
+
+    def test_a_research_with_a_stress_scenario_judges_every_candidate_under_it(self):
+        self.assertIn("lower case", self.p("settings", "--scenarios", "Stress!", expect=1))
+        self.assertIn("scenarios stress", self.p("settings", "--scenarios", "stress"))
+        self.assertIn("ending in _stress", self.p("register", "E1", expect=1))
+        self.row("E2", "net_per_trade > 0 & net_per_trade_stress > 0")
+        self.write("research/toy/KB/expect/E2.md", "x")
+        self.assertIn("registered E2", self.p("register", "E2"))
 
     def test_exploration_counts_as_trials(self):
         self.assertIn("--n: the number of configurations", self.p("explore", "--n", "0", "--what", "x", expect=1))

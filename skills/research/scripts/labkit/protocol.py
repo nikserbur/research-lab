@@ -211,9 +211,15 @@ def cmd_register(a) -> int:
     if ledger.find("register", a.id):
         return fail(f"{a.id} is registered already; a changed experiment gets a new id")
     try:
-        parse_criterion(row.get("pass_criterion", ""))
+        clauses = parse_criterion(row.get("pass_criterion", ""))
     except ValueError as e:
         return fail(f"pass_criterion of {a.id}: {e}")
+    from .selection import research_settings
+    for scenario in filter(None, (research_settings(ledger)["scenarios"] or "").split(",")):
+        if not is_control(a.lab, a.id) and not any(name.endswith("_" + scenario) for name, _, _ in clauses):
+            return fail(f"pass_criterion of {a.id}: this research judges every candidate under the scenario "
+                        f"{scenario!r} too; add a clause on a metric ending in _{scenario}, which the simulator "
+                        "writes in the same run (`lab.py settings`)")
     parent = row.get("parent", "").strip()
     if parent and not ledger.find("register", parent):
         return fail(f"parent {parent!r} of {a.id} is not a registered experiment: register the parent first")
@@ -603,11 +609,15 @@ def cmd_holdout(a) -> int:
         best = current_best(ledger)
         if not best or best["id"] != a.id or best["run_seq"] != latest_run(ledger, a.id)["seq"]:
             return fail(f"{a.id} is not the current BEST (`lab.py best`); only the best candidate is looked at")
-        from .selection import MIN_DSR, dsr_now, tested
+        from .selection import MIN_DSR, dsr_now, eligible, tested
         test, trials = tested(ledger, a.id)[1], trial_count(ledger)
         if test and dsr_now(test, trials) < MIN_DSR:
             return fail(f"{a.id}: after {trials} trials its deflated Sharpe is {dsr_now(test, trials):.3f}, below {MIN_DSR}: "
                         "the trials run since it became BEST deflate it too")
+        pool = sorted([id, run["seq"]] for id, (run, _) in eligible(a.lab, ledger).items())
+        if best.get("candidates") is not None and best["candidates"] != pool:
+            return fail("candidates were judged or reviewed since BEST was chosen: `lab.py best` again, "
+                        "so the look goes to the winner of all of them")
         env = a.lab / "KB" / "ENVIRONMENT.md"
         rows = tables.requirements(env, "verify")
         open_ = tables.unproven(rows) if rows else [f"no V requirements in {env}"]
