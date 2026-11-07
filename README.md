@@ -8,7 +8,7 @@ Claude runs research the way a careful lab does: it writes down what it expects 
 
 [![CI](https://github.com/nikserbur/research-lab/actions/workflows/ci.yml/badge.svg)](https://github.com/nikserbur/research-lab/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.10.0-informational)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.11.0-informational)](CHANGELOG.md)
 [![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-D97757)](#install)
 
 </div>
@@ -91,6 +91,7 @@ lab.py register --lab research/mm E7       # the row, its criterion and expect/E
 lab.py run --lab research/mm E7 --code scripts/03_sim.py --data data/2026q3.parquet -- python3 scripts/03_sim.py E7
 lab.py judge --lab research/mm E7          # "net_per_trade > 0 & trades >= 300" decides; prints trials so far
 lab.py check --lab research/mm             # edits after registration, KEEP without PASS, a broken chain
+lab.py holdout --lab research/mm protect data/holdout   # mode 000 and a hash until a look is open
 lab.py holdout --lab research/mm open E7   # one look budget per research; any failure spends the holdout
 lab.py brief --lab research/mm research/mm/BRIEF_2026-11-07.md   # every number traces to the record
 ```
@@ -172,7 +173,7 @@ On synthetic daily data with a weak real edge (yesterday's order-flow imbalance)
 - Two variants passed as LORD++ discoveries; the reviewer reproduced them byte for byte and showed they are one signal.
 - The pre-registered rule picked the sign rule, and its one look at a protected holdout passed (0.1496 per day over 199 days).
 
-It also found eleven things to fix, all fixed since: the scout's helper script read the holdout (now a hook refuses that), every candidate on the same code shared one hash, controls spent the first LORD++ positions, the truncation proof missed features computed ahead of the cut, and smaller ones in `status`, `next`, `trace` and `brief`.
+It also found eleven things to fix, all fixed since: the scout's helper script read the holdout (now the files are locked until a look, and a hook refuses that), every candidate on the same code shared one hash, controls spent the first LORD++ positions, the truncation proof missed features computed ahead of the cut, and smaller ones in `status`, `next`, `trace` and `brief`.
 
 ### Training a model
 
@@ -338,7 +339,7 @@ research-lab was called autolearn up to v0.3.1. Its delivery pipeline (`/feature
 
 - **Read-only on the web.** Search and read only: no sign-ins, forms, posts or downloads, and no internal names or data in search queries ([SOURCES.md](skills/knowledge-ingest/SOURCES.md)).
 - **Content is data.** Notes, pages, papers and tool output never become instructions.
-- **The holdout is fenced by code, not by instructions.** Once a research protects its holdout files, a hook refuses every read, search, copy or edit of them until the reviewer opens the one look.
+- **The holdout is locked, not just forbidden.** `lab.py holdout protect` records the holdout files' hash and takes every permission from them (mode 000), so no tool or script run as you can open them; only the look the reviewer opens gives them back, and `holdout status` reports a file that changed, moved or became readable. A hook refuses tool calls that name the files, with the reason. Neither stops a deliberate `chmod`, a copy made before `protect`, a process that already had a file open, or anything on Windows, where a mode only sets read-only and the hook is the only fence.
 - **Experiments are fenced.** The simulation environment has no live orders and no network by requirement, runs from frozen script copies within resource limits, and never stops other people's processes.
 - **No hook auto-approves anything.** Hooks deny with a reason and the fix, or stay silent.
 - **Local and private.** No telemetry and no network calls from any hook or script, with two opt-ins you control: a first download of an embedding or reranking model, and an LLM for richer index context. By default that LLM can only be an Ollama server on your own machine; sending notes to Claude needs `RESEARCH_LAB_LLM=claude`.
@@ -348,7 +349,7 @@ See [SECURITY.md](SECURITY.md) and [docs/hooks.md](docs/hooks.md).
 
 ## Status and limitations
 
-- **v0.10.0.** The hooks and scripts are covered by tests, and the whole loop has run end to end once (below). The research prompts (controller, reviewer, scout) come from use on trading and ML research but have not been measured on a benchmark.
+- **v0.11.0.** The hooks and scripts are covered by tests, and the whole loop has run end to end once (below). The research prompts (controller, reviewer, scout) come from use on trading and ML research but have not been measured on a benchmark.
 - **The environment checks are as good as the runs behind them.** `lab.py truncate` finds a look-ahead only across the cut you choose, so cut at several times; whether costs are realistic is the reviewer's judgement, not a script's.
 - **The ledger guards against drift, not against a determined forger.** Hashes catch edits to registered rows, expectations and the ledger itself; nothing stops someone from rewriting the whole ledger, or from running experiments outside `lab.py`, though `check` flags results that were never registered.
 - **The statistics assume a value per period.** The deflated Sharpe and the bootstrap need `daily.tsv`; with fewer than 20 periods a run counts as a test with p = 1. LORD++ grows strict as runs pile up without a discovery, so a long research needs stronger evidence for each new result; that is the point, and it can make a real but small edge go unrecognised. Strongly persistent daily results (lag-one correlation near 0.9) are still called significant too often: 9% at 5% in simulation. LORD++'s guarantee assumes independent p-values, and runs on the same days are not. PBO by combinatorial cross-validation is not implemented.

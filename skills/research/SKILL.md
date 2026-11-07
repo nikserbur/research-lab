@@ -109,16 +109,20 @@ numbers before it is registered), and write the proof in Evidence:
 - S3: `LAB repro --out <file> -- <command>`;
 - S5: the controls (do nothing, a shuffled target, a known case), registered in round `0` and run like
   any experiment. A round-0 experiment is a control: it spends no trial and no LORD++ position, needs no
-  review, and its decision is `CONTROL`;
+  review, is never BEST or looked at on the holdout, and its decision is `CONTROL`. Its round is fixed
+  once it runs, and the research's control runs are capped (`--max-controls`). A do-nothing or shuffled
+  control whose p falls below alpha points at a leak or a bug, not at an edge;
 - S6: `LAB trace results/<id>/trace.tsv`; every decision is a row, including deciding to do nothing and the
   last period, whose outcome is still unknown (a simulator that skips it hides a look-ahead at the cut).
 
 Fix the statistics and the budgets once, before the first run: `LAB settings --lab <folder> --column
-pnl --block auto --alpha 0.05 --run-timeout <seconds> --max-trials <N>` (the value column of
-`daily.tsv`, the bootstrap block, the error rate, the same time for every run so results compare, and
-the trials the whole research may spend). Protect the holdout files as soon as they exist: `LAB holdout --lab <folder> protect <path> ...`; a hook
-then refuses every tool that touches them until the reviewer opens a look, and every subagent is told
-their paths as never to be read. `LAB env KB/ENVIRONMENT.md --stage sim` lists what is unproven; a ❌ blocks round 1 unless the user
+pnl --block auto --alpha 0.05 --run-timeout <seconds> --max-trials <N> --max-controls <N>` (the value
+column of `daily.tsv`, the bootstrap block, the error rate, the same time for every run so results
+compare, the trials the whole research may spend, and the control runs, 10 unless set). Protect the holdout files as soon as they exist: `LAB holdout --lab <folder> protect <path> ...` records
+their hash and takes every permission from them until the reviewer opens a look (`LAB holdout status`
+says whether they are intact and locked; `protect` without a path locks them again). A hook refuses
+tool calls that name them, and every subagent is told their paths as never to be read. Make the
+holdout before `protect`, and keep no other copy. `LAB env KB/ENVIRONMENT.md --stage sim` lists what is unproven; a ❌ blocks round 1 unless the user
 accepts the risk (quote it in `PROGRAM.md`). V1-V5 are proven for a candidate before its holdout look
 (`--stage verify`).
 

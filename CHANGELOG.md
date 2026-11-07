@@ -6,6 +6,39 @@ All notable changes to this project are documented here. The format follows
 with every release, or plugin users will not receive the update. Up to 0.3.1 the project was
 called autolearn.
 
+## [0.11.0] - 2026-11-07
+
+What an independent review of 0.10.0 found. The main finding: the holdout guard was a hook that
+reads tool arguments, so a helper script that builds a path, a glob or a copy walked past it, while
+a bare folder name in a command (`holdout`) could refuse `lab.py holdout open` itself.
+
+### Changed
+- The holdout is locked by its file mode. `lab.py holdout protect PATH ...` records each file's or
+  folder's hash and mode and takes every permission from it (mode 000), so no program run as the user
+  can open it; `holdout open` gives the permissions back for the one look, `close` takes them away
+  again, and the new `holdout release` returns them for good (only after a look, or with `--force`).
+  `holdout status` checks each protected path (intact, CHANGED, MISSING), locks a readable one again
+  and says so; `protect` without a path locks everything protected again.
+- `holdout open` refuses a research with nothing protected, and refuses a control.
+- `research_guard.py` is the readable second layer: a protected folder covers everything inside it; a
+  shell command is refused when it names the file's path, or its name for a file with an extension,
+  never for a bare folder name; a search above a locked file passes (it cannot read it); Glob, which
+  only lists names, is no longer guarded; releases and the ledgers of research folders outside the
+  project (listed by `protect` in the data directory) are read; any error lets the call through with a
+  warning instead of failing every tool call.
+- Controls are capped: `lab.py settings --max-controls N` (10 unless set), so round 0 cannot hide
+  trials. A control is never BEST; a control marked KEEP still needs a judge PASS (only the review is
+  waived); a round changed after the run is an error in `check`; a control whose p falls below alpha
+  is flagged; `next` does not debug, grow or count a control towards its patience. `check` and
+  `status` print the control runs next to the trials.
+
+### Fixed
+- `trace --expect` read the "Shows in" column only when the header was exactly that, so with the
+  template's "Shows in (trace field or metric)" every stage was expected in the trace; a blank cell
+  still means the trace.
+- `brief` treats "95% CI", "90% credible interval" and "95% bootstrap interval" as levels, not results.
+- `stats` no longer says an untested control "counts as a test with p = 1".
+
 ## [0.10.0] - 2026-11-07
 
 What a first end-to-end `/research` run found. The session ran the whole loop by the skill with the
