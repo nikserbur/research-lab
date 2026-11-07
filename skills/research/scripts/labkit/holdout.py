@@ -1,23 +1,31 @@
-"""Keeping the holdout unread: `lab.py holdout protect` records each holdout file's hash and mode and
-takes every permission away from it (mode 000), so no program run as this user can open it: not a
-tool call, not a helper script, not a glob, a copy, a hard link or a symlink. `holdout open` gives the
-permissions back for the one look and `close` takes them away again; `release` returns them for good
-once the holdout is used up. The research_guard hook adds a readable refusal on top.
+"""Keeping the holdout unread.
 
-What it cannot stop: someone who runs chmod on purpose, a copy made before `protect`, a process that
-already had the file open, or Windows, where a mode only sets the read-only flag.
+`lab.py holdout protect PATH` records every file under PATH (hash, mode, size, modification time) and
+takes every permission away from it (mode 000), so no program run as this user can open it: not a tool
+call, not a helper script, not a glob, a copy or a link. A folder keeps its own mode, so its listing
+shows names but no contents; symlinks are skipped, since they may point outside. Nothing here opens a
+protected file outside a look: `status` compares sizes and times, and the hashes are checked when the
+reviewer opens a look. `open` gives the permissions back for that look, `close` takes them away again,
+`release` returns them for good. A file found readable outside a look is locked again and recorded as
+exposed, and a look on an exposed file is refused: that holdout is spent. Every chmod is checked, so
+a lock that did not take is never reported as one. The research_guard hook adds a readable refusal.
+
+What it cannot stop: a chmod and a read before anything checks, a copy made before `protect`, a
+process that already had the file open, readers during an open look, or Windows, where a mode only
+sets the read-only flag.
 """
 from __future__ import annotations
 
-import contextlib
 import hashlib
 import os
 import pathlib
 import stat
+import subprocess
 
 from .ledger import Ledger, sha256_bytes
 
 LOCKED = 0o000
+POSIX = os.name != "nt"
 
 
 def home() -> pathlib.Path:
@@ -39,22 +47,38 @@ def register_ledger(ledger: Ledger) -> None:
 
 
 def files_under(path: pathlib.Path) -> list:
-    return [path] if path.is_file() else sorted(p for p in path.rglob("*") if p.is_file())
+    """The regular files a protected path stands for, without following symlinks."""
+    if path.is_symlink():
+        return []
+    if path.is_file():
+        return [path]
+    out = []
+    for folder, _, names in os.walk(path):
+        out += [p for p in (pathlib.Path(folder) / n for n in names) if p.is_file() and not p.is_symlink()]
+    return sorted(out)
 
 
 def digest(path: pathlib.Path) -> str:
-    """sha256 of a file, or of the sorted (name, sha256) pairs of a folder."""
-    if path.is_file():
-        h = hashlib.sha256()
-        with open(path, "rb") as f:
-            for block in iter(lambda: f.read(1 << 20), b""):
-                h.update(block)
-        return h.hexdigest()
-    return sha256_bytes("".join(f"{p.relative_to(path)}:{digest(p)}\n" for p in files_under(path)).encode("utf-8"))
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def member(path: pathlib.Path) -> dict:
+    st = path.stat()
+    return {"path": str(path), "mode": stat.S_IMODE(st.st_mode), "size": st.st_size,
+            "mtime_ns": st.st_mtime_ns, "sha256": digest(path)}
+
+
+def members(item: dict) -> list:
+    """The files of one protected path; an entry written by 0.11.0 lists none and stands for itself."""
+    return item.get("members") or [{"path": item["path"], "mode": item.get("mode", 0o644), "sha256": item.get("sha256")}]
 
 
 def entries(ledger: Ledger) -> dict:
-    """{path: {mode, sha256}} of what is protected and not released."""
+    """{path: item} of what is protected and not released."""
     out = {}
     for e in ledger.entries():
         if e.get("kind") == "protect":
@@ -67,102 +91,190 @@ def entries(ledger: Ledger) -> dict:
     return out
 
 
-def lock(path: pathlib.Path) -> None:
-    for p in files_under(path) if path.is_dir() else []:  # files first, while the folder still opens
-        os.chmod(p, LOCKED)
-    os.chmod(path, LOCKED)
+def all_members(ledger: Ledger) -> list:
+    return [m for item in entries(ledger).values() for m in members(item)]
 
 
-def unlock(path: pathlib.Path, mode: int) -> None:
-    os.chmod(path, mode)
-    if path.is_dir():
-        for p in path.rglob("*"):
-            if p.is_file():
-                os.chmod(p, stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
+def look_open(ledger: Ledger) -> bool:
+    return len(ledger.find("holdout_open")) > len(ledger.find("holdout_close"))
 
 
-@contextlib.contextmanager
-def opened(paths: dict):
-    """Let this process read the protected files for a moment (to check their hash), then lock them again."""
-    for path, item in paths.items():
-        with contextlib.suppress(OSError):
-            unlock(pathlib.Path(path), item.get("mode", 0o644))
+def set_mode(path: str, mode: int) -> bool:
+    """chmod, and check that it took: a file that cannot be locked must never be reported as locked."""
     try:
-        yield
-    finally:
-        for path in paths:
-            with contextlib.suppress(OSError):
-                lock(pathlib.Path(path))
+        os.chmod(path, mode)
+        return not POSIX or stat.S_IMODE(os.stat(path).st_mode) == mode
+    except OSError:
+        return False
+
+
+def lock(ms: list) -> list:
+    return [m["path"] for m in ms if not set_mode(m["path"], LOCKED)]
+
+
+def unlock(ms: list) -> list:
+    return [m["path"] for m in ms if not set_mode(m["path"], m.get("mode") or 0o644)]
+
+
+def readable(m: dict) -> bool:
+    try:
+        return POSIX and bool(stat.S_IMODE(os.stat(m["path"]).st_mode))
+    except OSError:
+        return False
+
+
+def git_state(path: pathlib.Path) -> tuple:
+    """(problem, warning): a tracked holdout has readable copies in every checkout and worktree; an
+    untracked one that git does not ignore makes `git add -A` fail once it has no permissions."""
+    def git(*args):
+        try:
+            return subprocess.run(["git", "-C", str(path.parent), *args], capture_output=True, text=True, timeout=20)
+        except (OSError, subprocess.SubprocessError):
+            return None
+
+    tracked = git("ls-files", "--", path.name)
+    if tracked is None or tracked.returncode != 0:
+        return None, None  # no git, or not a repository
+    if tracked.stdout.strip():
+        return (f"{path} is tracked by git, so every checkout and worktree has a readable copy: "
+                f"`git rm -r --cached` it and list it in .gitignore first"), None
+    ignored = git("check-ignore", "-q", "--", path.name)
+    if ignored is not None and ignored.returncode == 1:
+        return None, f"{path} is not in .gitignore: without permissions it makes `git add -A` fail"
+    return None, None
 
 
 def protect(ledger: Ledger, given: list) -> tuple:
-    """(newly protected items, problems) for these paths: hash, mode, then mode 000. Paths protected
-    before are not hashed again (they are locked); every protected path is locked again."""
+    """(newly protected items, problems, warnings). All or nothing: if a file cannot be locked, none is,
+    and nothing is recorded."""
     known = entries(ledger)
-    items, problems = [], []
+    taken = {m["path"] for item in known.values() for m in members(item)}
+    items, problems, warnings = [], [], []
     for raw in given:
-        path = pathlib.Path(raw).resolve()
-        if str(path) in known or any(i["path"] == str(path) for i in items):
+        root = pathlib.Path(raw).resolve()
+        if str(root) in known or any(i["path"] == str(root) for i in items):
             continue
-        if not path.exists():
-            problems.append(f"no such file: {path}")
+        if not root.exists():
+            problems.append(f"no such file: {root}")
             continue
-        items.append({"path": str(path), "mode": stat.S_IMODE(path.stat().st_mode), "sha256": digest(path)})
+        files = files_under(root)
+        if not files:
+            problems.append(f"no files under {root} (symlinks are not followed)")
+            continue
+        if any(str(f) in taken for f in files):
+            problems.append(f"{root}: protected already, under another path")
+            continue
+        problem, warning = git_state(root)
+        if problem:
+            problems.append(problem)
+            continue
+        warnings += [warning] if warning else []
+        try:
+            ms = [member(f) for f in files]
+        except OSError as e:
+            problems.append(f"cannot read {e.filename}: {e.strerror} (locked by another research?)")
+            continue
+        whole = ms[0]["sha256"] if root.is_file() else sha256_bytes(
+            "".join(f"{pathlib.Path(m['path']).relative_to(root)}:{m['sha256']}\n" for m in ms).encode("utf-8"))
+        items.append({"path": str(root), "sha256": whole, "members": ms})
     if problems:
-        return [], problems
+        return [], problems, []
+    new = [m for item in items for m in members(item)]
+    failed = lock(new)
+    if failed:
+        unlock(new)
+        return [], [f"could not take the permissions from {p} (not your file, or a read-only file system)"
+                    for p in failed], []
     if items:
         ledger.append("protect", files=items, paths=[i["path"] for i in items])
-    for path in [*known, *(i["path"] for i in items)]:
-        with contextlib.suppress(OSError):
-            lock(pathlib.Path(path))
     register_ledger(ledger)
-    return items, []
+    return items, [], warnings
 
 
-def check(ledger: Ledger, look_open: bool = False) -> list:
-    """One line per protected path: missing, changed, or intact, and whether it was readable. Outside a
-    look the files are locked again on the way out; during one they are readable on purpose and stay so."""
-    out = []
-    items = entries(ledger)
-    present = {p: i for p, i in items.items() if pathlib.Path(p).exists()}
-    readable = {p for p in present if os.name != "nt" and stat.S_IMODE(pathlib.Path(p).stat().st_mode)}
-    with (contextlib.nullcontext() if look_open else opened(present)):
-        hashes = {}
-        for p in present:
-            try:
-                hashes[p] = digest(pathlib.Path(p))
-            except OSError as e:
-                hashes[p] = f"unreadable: {e}"
-    for path, item in items.items():
-        if path not in present:
-            out.append(f"{path}: MISSING (moved or deleted after it was protected)")
-            continue
-        if hashes[path] != item.get("sha256"):
-            out.append(f"{path}: CHANGED since it was protected" + (
-                f" ({hashes[path]})" if hashes[path].startswith("unreadable") else ""))
-            continue
-        state = "open for the look" if look_open else (
-            "was READABLE, locked again now" if path in readable else "locked")
-        out.append(f"{path}: intact, sha256 {item['sha256'][:12]}, {state}")
+def enforce(ledger: Ledger, by: str) -> tuple:
+    """(exposed, failed): lock again every protected file that is readable outside a look, and record it
+    as exposed; a look on it is refused from then on."""
+    if look_open(ledger):
+        return [], []
+    exposed = [m for m in all_members(ledger) if readable(m)]
+    if not exposed:
+        return [], []
+    failed = lock(exposed)
+    ledger.append("holdout_exposed", paths=[m["path"] for m in exposed], by=by, unlocked=failed)
+    return [m["path"] for m in exposed], failed
+
+
+def exposures(ledger: Ledger) -> dict:
+    """{file: how}: every protected file that was readable outside a look, found so or released before one."""
+    out = {}
+    for e in ledger.entries():
+        when = str(e.get("ts", ""))[:19]
+        if e.get("kind") == "holdout_exposed":
+            for p in e.get("paths") or []:
+                out.setdefault(p, f"found readable by {e.get('by')} at {when}")
+        elif e.get("kind") == "release" and e.get("forced"):
+            for p in e.get("members") or e.get("paths") or []:
+                out.setdefault(p, f"released before any look at {when}")
     return out
 
 
-def open_for_look(ledger: Ledger) -> None:
-    for path, item in entries(ledger).items():
-        with contextlib.suppress(OSError):
-            unlock(pathlib.Path(path), item.get("mode", 0o644))
+def changed(m: dict) -> bool:
+    if "size" not in m:
+        return False
+    try:
+        st = os.stat(m["path"])
+    except OSError:
+        return False
+    return st.st_size != m["size"] or st.st_mtime_ns != m["mtime_ns"]
 
 
-def close_after_look(ledger: Ledger) -> None:
-    for path in entries(ledger):
-        with contextlib.suppress(OSError):
-            lock(pathlib.Path(path))
+def check(ledger: Ledger) -> list:
+    """One line per protected path, without opening a file: how many files, locked or readable, and
+    what is MISSING, CHANGED (size or time), added since, or EXPOSED."""
+    out, gone, is_open = [], exposures(ledger), look_open(ledger)
+    for root, item in entries(ledger).items():
+        ms = members(item)
+        missing = {m["path"] for m in ms if not os.path.lexists(m["path"])}
+        moved = [m for m in ms if m["path"] not in missing and changed(m)]
+        open_ = [m for m in ms if m["path"] not in missing and readable(m)]
+        added = (sorted({str(p) for p in files_under(pathlib.Path(root))} - {m["path"] for m in ms})
+                 if pathlib.Path(root).is_dir() else [])
+        spent = [m["path"] for m in ms if m["path"] in gone]
+        problems = ([f"{len(missing)} MISSING"] if missing else []) + \
+                   ([f"{len(moved)} CHANGED (size or time)"] if moved else []) + \
+                   ([f"{len(added)} added since, not protected"] if added else []) + \
+                   ([f"EXPOSED: {gone[spent[0]]}" + (f" (and {len(spent) - 1} more)" if len(spent) > 1 else "")]
+                    if spent else [])
+        state = "open for the look" if is_open else (f"{len(open_)} READABLE" if open_ else "locked")
+        out.append(f"{root}: {len(ms)} file(s), sha256 {str(item.get('sha256', '?'))[:12]}, {state}"
+                   + ("; " + "; ".join(problems) if problems else ", intact"))
+    return out
 
 
-def release(ledger: Ledger) -> list:
+def open_for_look(ledger: Ledger) -> list:
+    """Give the protected files their permissions back and check their hashes; returns the problems."""
+    ms = all_members(ledger)
+    failed = set(unlock(ms))
+    problems = [f"{p}: could not give the permissions back" for p in sorted(failed)]
+    for m in ms:
+        if m["path"] in failed or not m.get("sha256") or not pathlib.Path(m["path"]).is_file():
+            continue
+        try:
+            if digest(pathlib.Path(m["path"])) != m["sha256"]:
+                problems.append(f"{m['path']} CHANGED since it was protected")
+        except OSError as e:
+            problems.append(f"{m['path']}: {e.strerror}")
+    return problems
+
+
+def close_after_look(ledger: Ledger) -> list:
+    return lock(all_members(ledger))
+
+
+def release(ledger: Ledger, forced: bool) -> tuple:
+    """(released paths, files that kept no permissions)."""
     items = entries(ledger)
-    for path, item in items.items():
-        with contextlib.suppress(OSError):
-            unlock(pathlib.Path(path), item.get("mode", 0o644))
-    ledger.append("release", paths=sorted(items))
-    return sorted(items)
+    ms = [m for item in items.values() for m in members(item)]
+    failed = unlock(ms)
+    ledger.append("release", paths=sorted(items), members=[m["path"] for m in ms], forced=forced)
+    return sorted(items), failed

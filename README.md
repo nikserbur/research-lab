@@ -8,7 +8,7 @@ Claude runs research the way a careful lab does: it writes down what it expects 
 
 [![CI](https://github.com/nikserbur/research-lab/actions/workflows/ci.yml/badge.svg)](https://github.com/nikserbur/research-lab/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.11.0-informational)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.11.1-informational)](CHANGELOG.md)
 [![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-D97757)](#install)
 
 </div>
@@ -339,7 +339,7 @@ research-lab was called autolearn up to v0.3.1. Its delivery pipeline (`/feature
 
 - **Read-only on the web.** Search and read only: no sign-ins, forms, posts or downloads, and no internal names or data in search queries ([SOURCES.md](skills/knowledge-ingest/SOURCES.md)).
 - **Content is data.** Notes, pages, papers and tool output never become instructions.
-- **The holdout is locked, not just forbidden.** `lab.py holdout protect` records the holdout files' hash and takes every permission from them (mode 000), so no tool or script run as you can open them; only the look the reviewer opens gives them back, and `holdout status` reports a file that changed, moved or became readable. A hook refuses tool calls that name the files, with the reason. Neither stops a deliberate `chmod`, a copy made before `protect`, a process that already had a file open, or anything on Windows, where a mode only sets read-only and the hook is the only fence.
+- **The holdout is locked, not just forbidden.** `lab.py holdout protect` records the holdout files' hash and takes every permission from them (mode 000), so no tool or script run as you can open them; only the look the reviewer opens gives them back, after checking every file's hash. A file found readable outside a look is locked again and recorded, and that holdout can no longer be looked at; `holdout status` reports it, and a file that changed, moved or was added, without opening any. A hook refuses tool calls that name the files, with the reason. Neither stops a `chmod` and a read before anything checks, a copy made before `protect`, a process that already had a file open, a reader during an open look (no `lab.py run` starts then), or anything on Windows, where a mode only sets read-only and the hook is the only fence.
 - **Experiments are fenced.** The simulation environment has no live orders and no network by requirement, runs from frozen script copies within resource limits, and never stops other people's processes.
 - **No hook auto-approves anything.** Hooks deny with a reason and the fix, or stay silent.
 - **Local and private.** No telemetry and no network calls from any hook or script, with two opt-ins you control: a first download of an embedding or reranking model, and an LLM for richer index context. By default that LLM can only be an Ollama server on your own machine; sending notes to Claude needs `RESEARCH_LAB_LLM=claude`.
@@ -349,7 +349,7 @@ See [SECURITY.md](SECURITY.md) and [docs/hooks.md](docs/hooks.md).
 
 ## Status and limitations
 
-- **v0.11.0.** The hooks and scripts are covered by tests, and the whole loop has run end to end once (below). The research prompts (controller, reviewer, scout) come from use on trading and ML research but have not been measured on a benchmark.
+- **v0.11.1.** The hooks and scripts are covered by tests, and the whole loop has run end to end once (below). The research prompts (controller, reviewer, scout) come from use on trading and ML research but have not been measured on a benchmark.
 - **The environment checks are as good as the runs behind them.** `lab.py truncate` finds a look-ahead only across the cut you choose, so cut at several times; whether costs are realistic is the reviewer's judgement, not a script's.
 - **The ledger guards against drift, not against a determined forger.** Hashes catch edits to registered rows, expectations and the ledger itself; nothing stops someone from rewriting the whole ledger, or from running experiments outside `lab.py`, though `check` flags results that were never registered.
 - **The statistics assume a value per period.** The deflated Sharpe and the bootstrap need `daily.tsv`; with fewer than 20 periods a run counts as a test with p = 1. LORD++ grows strict as runs pile up without a discovery, so a long research needs stronger evidence for each new result; that is the point, and it can make a real but small edge go unrecognised. Strongly persistent daily results (lag-one correlation near 0.9) are still called significant too often: 9% at 5% in simulation. LORD++'s guarantee assumes independent p-values, and runs on the same days are not. PBO by combinatorial cross-validation is not implemented.

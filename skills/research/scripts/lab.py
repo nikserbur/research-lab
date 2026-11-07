@@ -115,16 +115,15 @@ def cmd_env(a) -> int:
 
 
 def expected_stages(path: pathlib.Path) -> list:
-    """Stages the trace should show: rows whose "Shows in" cell names the trace (a row shown only in metrics,
-    such as the outcome of a decision, is not a trace stage)."""
+    """Stages the trace should show: every row but those whose "Shows in" cell names only metrics (the
+    outcome of a decision is not a trace stage). A blank cell, or one naming trace fields, means the trace."""
     rows = tables.table_rows(path.read_text(encoding="utf-8"), ("stage",))
 
-    def shows_in(row: dict) -> str:  # the template's header is "Shows in (trace field or metric)"
-        cell = next((v for k, v in row.items() if k.startswith("shows in")), "")
-        return cell.strip() or "trace"
+    def in_trace(row: dict) -> bool:  # the template's header is "Shows in (trace field or metric)"
+        cell = next((v for k, v in row.items() if k.startswith("shows in")), "").lower()
+        return "metric" not in cell or "trace" in cell or "stage=" in cell
 
-    return [r["stage"].strip("`* ").lower() for r in rows if r.get("stage", "").strip("`* ")
-            and "trace" in shows_in(r).lower()]
+    return [r["stage"].strip("`* ").lower() for r in rows if r.get("stage", "").strip("`* ") and in_trace(r)]
 
 
 def cmd_trace(a) -> int:

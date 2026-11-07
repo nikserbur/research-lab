@@ -181,6 +181,11 @@ def cmd_run(a) -> int:
         return fail(f"{a.id}: " + "; ".join(problems))
     if ledger.find("holdout_open", a.id):
         return fail(f"{a.id} was looked at on the holdout; it cannot change. A new candidate gets a new id")
+    if holdout.look_open(ledger):
+        return fail(f"a holdout look is open ({ledger.last('holdout_open')['id']}): no run until it is closed, "
+                    "so nothing else can read the holdout meanwhile")
+    if exposed_note(*holdout.enforce(ledger, by=f"run {a.id}")):
+        return fail("a protected file could not be locked again; no run until it is")
     if ledger.find("run_start", a.id) and not a.again:
         return fail(f"{a.id} has run already; --again runs it once more and counts as another trial")
     from . import selection  # every run is a test, recorded as it ends
@@ -437,6 +442,10 @@ def cmd_check(a) -> int:
     if knowledge.exists() and knowledge.stat().st_size > KNOWLEDGE_CAP:
         warnings.append(f"KNOWLEDGE.md is {knowledge.stat().st_size // 1000} KB: keep the current state there and move "
                         "older sections to KB/archive/KNOWLEDGE-<date>.md (still searched, no longer read in full)")
+    warnings += [f"holdout {line}" for line in holdout.check(ledger) if "READABLE" in line or not line.endswith("intact")]
+    if holdout.look_open(ledger):
+        warnings.append(f"a holdout look for {ledger.last('holdout_open')['id']} is open since "
+                        f"{ledger.last('holdout_open')['ts']}: close it as soon as its run ends")
     if len(best) > 1:
         errors.append(f"more than one row marked BEST: {', '.join(best)}")
     recorded_best = current_best(ledger)
@@ -459,6 +468,14 @@ def cmd_check(a) -> int:
     return 1 if errors else 0
 
 
+def exposed_note(exposed: list, failed: list) -> list:
+    for p in exposed:
+        print(f"! {p} was readable outside a look: locked again and recorded; a look on it is refused now")
+    for p in failed:
+        print(f"! {p} could not be locked: chmod 000 it by hand")
+    return failed
+
+
 def cmd_holdout(a) -> int:
     ledger = Ledger(a.lab)
     opens, closes = ledger.find("holdout_open"), ledger.find("holdout_close")
@@ -470,34 +487,45 @@ def cmd_holdout(a) -> int:
             return fail("protect needs the holdout files: lab.py holdout --lab DIR protect PATH ...")
         if look_open:
             return fail("a look is open; protect after it is closed")
-        items, problems = holdout.protect(ledger, given)
+        items, problems, warnings = holdout.protect(ledger, given)
         if problems:
             return fail("; ".join(problems))
         for item in items:
-            print(f"protected {item['path']} (sha256 {item['sha256'][:12]}): no permissions until a look is open")
+            print(f"protected {item['path']} ({len(holdout.members(item))} file(s), sha256 {item['sha256'][:12]}): "
+                  "no permissions until a look is open")
+        for w in warnings:
+            print(f"! {w}")
+        failed = exposed_note(*holdout.enforce(ledger, by="holdout protect"))
         if known:
-            print(f"locked again: {len(known)} path(s) protected before")
+            print(f"{len(known)} path(s) protected before: " + ("not all locked" if failed else "locked"))
         if os.name == "nt":
             print("! on Windows a mode only sets read-only: only the hook stands between tools and the holdout")
-        return 0
-    if a.action == "release":
+        return 1 if failed else 0
+    if a.action == "release":  # the controller's, once the holdout is used up
         if look_open:
             return fail("a look is open; close it first")
-        if not closes and not a.force:
+        forced = not closes
+        if forced and not a.force:
             return fail("the holdout has not been looked at; release gives it back for good (--force if that is meant)")
-        released = holdout.release(ledger)
+        released, failed = holdout.release(ledger, forced)
         print(f"released: {', '.join(released) or 'nothing'}")
-        return 0
+        if forced and released:
+            print("! released before any look: recorded as exposed, so these files can no longer be a holdout")
+        for p in failed:
+            print(f"! {p} kept no permissions: chmod it by hand")
+        return 1 if failed else 0
     if bad_id(a):
         return 1
     budget = opens[0]["budget"] if opens else (a.budget or 1)
     if a.action == "status":
+        exposed_note(*holdout.enforce(ledger, by="holdout status"))
         print(f"look budget {budget} for this research; {len(opens)} used")
         for c in closes:
-            print(f"  look {c['look']}: {c['id']} {c['verdict']} {json.dumps(c['metrics'])}")
+            print(f"  look {c['look']}: {c['id']} {c['verdict']} {json.dumps(c.get('metrics') or {})}"
+                  + (f" ({c['reason']})" if c.get("reason") else ""))
         if len(opens) > len(closes):
-            print(f"  look {len(opens)}: {opens[-1]['id']} open")
-        lines = holdout.check(ledger, look_open)
+            print(f"  look {len(opens)}: {opens[-1]['id']} open since {opens[-1]['ts']}")
+        lines = holdout.check(ledger)
         print("protected:" + ("".join(f"\n  {line}" for line in lines) if lines else " nothing yet (lab.py holdout protect PATH)"))
         return 0
     if not a.id:
@@ -526,15 +554,26 @@ def cmd_holdout(a) -> int:
             return fail(f"{a.id}: " + "; ".join(problems))
         spent = [c for c in closes if c["verdict"] != "PASS"]
         if spent:
-            return fail(f"the holdout is spent: {spent[0]['id']} failed on it ({spent[0]['ts'][:10]}); "
+            return fail(f"the holdout is spent: {spent[0]['id']} was {spent[0]['verdict']} on it ({spent[0]['ts'][:10]}); "
                         "confirm on a new, later window written into ENVIRONMENT.md")
         if len(opens) > len(closes):
             return fail(f"the look for {opens[-1]['id']} is still open; close it first")
         if len(opens) >= budget:
             return fail(f"look budget {budget} is used; another look would make any result SPOILED")
+        exposed_note(*holdout.enforce(ledger, by=f"holdout open {a.id}"))
+        gone = holdout.exposures(ledger)
+        seen = [m["path"] for m in holdout.all_members(ledger) if m["path"] in gone]
+        if seen:
+            return fail(f"{seen[0]} was readable outside a look ({gone[seen[0]]}): it is no holdout any more; "
+                        "confirm on a new, later window written into ENVIRONMENT.md")
         candidate = ledger.last("run_start", a.id)["candidate"]
         ledger.append("holdout_open", id=a.id, candidate=candidate, budget=budget, look=len(opens) + 1, by=a.by)
-        holdout.open_for_look(ledger)
+        problems = holdout.open_for_look(ledger)
+        if problems:  # the look is opened first, so a changed holdout spends it instead of waiting for a better day
+            holdout.close_after_look(ledger)
+            ledger.append("holdout_close", id=a.id, verdict="SPOILED", look=len(opens) + 1, metrics_sha="", metrics={},
+                          reason="; ".join(problems))
+            return fail("the look is SPOILED and the holdout spent: " + "; ".join(problems))
         (a.lab / "sealed").mkdir(parents=True, exist_ok=True)
         print(f"look {len(opens) + 1} of {budget} is open for {a.id} (candidate {candidate}). Run it once on the "
               f"holdout, write the report into sealed/ (outside KB/), then: lab.py holdout close {a.id} --metrics FILE")
@@ -558,12 +597,14 @@ def cmd_holdout(a) -> int:
         return fail(f"{a.metrics}: {e}")
     except KeyError as e:
         return fail(f"{a.metrics} has no finite value for {e}")
+    failed = holdout.close_after_look(ledger)  # locked before the look is recorded as closed
     ledger.append("holdout_close", id=a.id, verdict=verdict, look=len(opens), metrics_sha=digest,
-                  metrics={name: metrics[name] for name, _, _ in clauses})
-    holdout.close_after_look(ledger)
+                  metrics={name: metrics[name] for name, _, _ in clauses}, unlocked=failed)
     print(f"{a.id} on the holdout: {verdict}")
     for line in lines:
         print(f"  {line}")
+    for p in failed:
+        print(f"! {p} could not be locked again: chmod 000 it by hand")
     return 0 if verdict == "PASS" else 1
 
 

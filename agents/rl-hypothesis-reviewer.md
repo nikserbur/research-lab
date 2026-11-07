@@ -78,11 +78,14 @@ says what each stage should do is not ready to run.
 ## Mode "verify": judge a frozen candidate once
 1. Prove V1-V5 of `ENVIRONMENT.md` for this candidate (`lab.py env RES/ENVIRONMENT.md --stage verify`):
    the holdout apart from everything the loop saw, the candidate's run in the ledger, the same
-   environment. The holdout files stay locked until step 2: take their hash and state from
-   `lab.py holdout --lab LAB_DIR status` (intact, locked) and their window from `ENVIRONMENT.md`, not
-   from the files. A broken V requirement, or a file CHANGED or MISSING, is SPOILED: stop there.
-2. `lab.py holdout --lab LAB_DIR open <id>` before anything touches the holdout; it gives the files
-   their permissions back for this one look, and `close` takes them away again. If it refuses (no
+   environment. The holdout files stay locked until step 2: take their state from
+   `lab.py holdout --lab LAB_DIR status` (locked, intact, not EXPOSED) and their window from
+   `ENVIRONMENT.md`, not from the files. A broken V requirement, or a file MISSING, CHANGED or
+   EXPOSED, is SPOILED: stop there. Never run `holdout release`.
+2. `lab.py holdout --lab LAB_DIR open <id>` before anything touches the holdout; it checks every
+   file's hash, gives the files their permissions back for this one look (a changed file spends the
+   look as SPOILED), and `close` takes them away again. Close as soon as the run ends: no other run
+   starts while a look is open. If it refuses (no
    PASS in simulation, the budget used, the holdout spent by an earlier failure), the verdict is
    SPOILED with its reason; do not run.
 3. Run the candidate once on the holdout in the same environment, from its frozen code, within the

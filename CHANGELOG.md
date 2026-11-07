@@ -6,6 +6,34 @@ All notable changes to this project are documented here. The format follows
 with every release, or plugin users will not receive the update. Up to 0.3.1 the project was
 called autolearn.
 
+## [0.11.1] - 2026-11-07
+
+What an independent review of 0.11.0 found in the holdout lock.
+
+### Fixed
+- Every chmod is checked. A file that cannot be locked (not yours, a read-only file system) made
+  `protect` print "no permissions" and `status` "locked again"; now `protect` is all or nothing and
+  records nothing unless every file is locked.
+- `holdout status` opened the files to hash them, so a killed or timed-out `status` left them
+  readable, and any agent could open that window. Nothing opens a protected file outside a look now:
+  `status` compares size and modification time, and `holdout open` checks every hash; a changed file
+  spends the look as SPOILED.
+- A file found readable outside a look (by `status`, `run`, `protect` or `holdout open`) is locked
+  again and recorded as `holdout_exposed`; `holdout open` refuses an exposed file, `check` warns and
+  `STATUS.md` says so. `release --force` before any look counts as an exposure, so releasing and
+  protecting again does not launder a holdout that was read.
+- A folder is no longer locked as a whole: each file is recorded and locked with its own mode and gets
+  that mode back (opening reset them all to 0644, and a 0600 file became world-readable); symlinks are
+  skipped (one pointing outside had its target locked); files added later are reported.
+- `holdout close` locks the files before it records the look as closed.
+- No `lab.py run` starts while a look is open; `check` and `STATUS.md` show an open look.
+- `protect` refuses a holdout tracked by git (every checkout and worktree has a readable copy), warns
+  about one `.gitignore` does not list (`git add -A` fails on it), and refuses a path protected already
+  under another one, instead of a traceback.
+- `trace --expect`: a "Shows in" cell naming trace fields as the template does (`stage=signal, inputs,
+  action`) is a trace stage; only a cell naming metrics alone is not.
+- The hook matches a protected path written through `/tmp` or `/var` on macOS.
+
 ## [0.11.0] - 2026-11-07
 
 What an independent review of 0.10.0 found. The main finding: the holdout guard was a hook that

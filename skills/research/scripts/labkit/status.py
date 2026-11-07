@@ -9,9 +9,9 @@ import datetime
 import pathlib
 import re
 
-from . import tables
+from . import holdout, tables
 from .ledger import Ledger
-from .protocol import KNOWLEDGE_CAP, control_count, current_best, fail, journal, live, runs, trial_count
+from .protocol import KNOWLEDGE_CAP, control_count, current_best, exposed_note, fail, journal, live, runs, trial_count
 
 
 def jobs(lab: pathlib.Path, ledger: Ledger) -> list:
@@ -105,8 +105,11 @@ def summary(lab: pathlib.Path) -> list:
         lines.append("- Best: none yet")
     opens, closes = ledger.find("holdout_open"), ledger.find("holdout_close")
     budget = opens[0].get("budget") if opens else None
+    exposed = holdout.exposures(ledger)
     lines.append(f"- Holdout: {len(opens)} look(s)" + (f" of {budget}" if budget else "")
-                 + "".join(f"; {c.get('id')} {c.get('verdict')}" for c in closes))
+                 + "".join(f"; {c.get('id')} {c.get('verdict')}" for c in closes)
+                 + (f"; a look for {opens[-1].get('id')} is OPEN since {opens[-1].get('ts')}" if len(opens) > len(closes) else "")
+                 + (f"; {len(exposed)} file(s) EXPOSED outside a look" if exposed else ""))
     knowledge = lab / "KB" / "KNOWLEDGE.md"
     discrepancies = 0
     if knowledge.exists():
@@ -146,6 +149,7 @@ def cmd_jobs(a) -> int:
 def cmd_status(a) -> int:
     if missing_lab(a.lab):
         return 1
+    exposed_note(*holdout.enforce(Ledger(a.lab), by="status"))
     lines = summary(a.lab)
     (a.lab / "STATUS.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
     print("\n".join(lines))

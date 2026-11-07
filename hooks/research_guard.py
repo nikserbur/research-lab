@@ -72,10 +72,14 @@ def in_shell(command: str, path: pathlib.Path, root: pathlib.Path) -> bool:
     """The command names the file: its absolute or project-relative path, or, for a file with an
     extension, its name as a whole token. A bare folder name is too common a word to refuse on."""
     names = {str(path)}
-    try:
-        names.add(path.relative_to(root.resolve()).as_posix())
-    except ValueError:
-        pass
+    if str(path).startswith("/private/"):  # macOS: /tmp and /var are links into /private
+        names.add(str(path)[len("/private"):])
+    for base in (root, root.resolve()):
+        try:
+            names.add(path.relative_to(base.resolve()).as_posix())
+            names.add(str(base / path.relative_to(base.resolve())))
+        except ValueError:
+            pass
     if "." in path.name:
         names.add(path.name)
     return any(re.search(rf"(?<![\w.-]){re.escape(n)}(?![\w-]|\.\w)", command) for n in names)

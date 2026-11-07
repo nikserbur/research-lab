@@ -119,10 +119,14 @@ Fix the statistics and the budgets once, before the first run: `LAB settings --l
 pnl --block auto --alpha 0.05 --run-timeout <seconds> --max-trials <N> --max-controls <N>` (the value
 column of `daily.tsv`, the bootstrap block, the error rate, the same time for every run so results
 compare, the trials the whole research may spend, and the control runs, 10 unless set). Protect the holdout files as soon as they exist: `LAB holdout --lab <folder> protect <path> ...` records
-their hash and takes every permission from them until the reviewer opens a look (`LAB holdout status`
-says whether they are intact and locked; `protect` without a path locks them again). A hook refuses
-tool calls that name them, and every subagent is told their paths as never to be read. Make the
-holdout before `protect`, and keep no other copy. `LAB env KB/ENVIRONMENT.md --stage sim` lists what is unproven; a ❌ blocks round 1 unless the user
+each file's hash and takes every permission from it until the reviewer opens a look. Make the holdout
+before `protect`, keep no other copy, keep it out of git (`protect` refuses a tracked file and warns
+about one `.gitignore` does not list), and tell every subagent its paths as never to be read; a hook
+refuses tool calls that name them. `LAB holdout status` says, without opening anything, whether they
+are locked and intact. A file found readable outside a look (by `status`, `run` or `holdout open`) is
+locked again and recorded as exposed, and that holdout can no longer be looked at: confirm on a new
+window. No `LAB run` starts while a look is open. `LAB holdout release` is yours alone, once the
+research is over. `LAB env KB/ENVIRONMENT.md --stage sim` lists what is unproven; a ❌ blocks round 1 unless the user
 accepts the risk (quote it in `PROGRAM.md`). V1-V5 are proven for a candidate before its holdout look
 (`--stage verify`).
 

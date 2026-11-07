@@ -237,6 +237,11 @@ class ResearchGuard(HookCase):
         finally:
             os.chmod(self.holdout, 0o644)
 
+    def test_a_path_written_through_a_link_is_still_the_path(self):
+        self.ledger([{"kind": "protect", "paths": ["/private/var/research/hold"]}])
+        self.assertEqual(self.call("Bash", command="ls /var/research/hold/2026"), "deny")
+        self.assertEqual(self.call("Bash", command="ls /var/research/holdings"), "allow")
+
     def test_a_release_ends_the_protection_and_the_registry_finds_other_folders(self):
         self.ledger([{"kind": "protect", "paths": [str(self.holdout.resolve())]},
                      {"kind": "release", "paths": [str(self.holdout.resolve())]}])

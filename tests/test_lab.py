@@ -101,11 +101,13 @@ class Trace(LabCase):
 
     def test_an_outcome_shown_in_metrics_is_not_a_missing_stage(self):
         expect = ("| Stage | Should do | Shows in (trace field or metric) |\n|---|---|---|\n"
-                  "| decision | go long | trace action |\n| outcome | earn | metrics net_per_day |\n| filter | skip | |\n")
+                  "| decision | go long | trace action |\n| outcome | earn | metrics net_per_day |\n| filter | skip | |\n"
+                  "| fill | at the ask | stage=fill, price |\n")
         out = self.lab("trace", self.write("t.tsv", "ts\tstage\taction\tinputs\n1\tdecision\tlong\tx\n"),
                        "--expect", self.write("E.md", expect))
         self.assertNotIn("stage 'outcome'", out)
         self.assertIn("'filter'", out)  # a blank cell keeps the stage
+        self.assertIn("'fill'", out)  # trace fields, as the template writes them
 
     def test_missing_columns_and_blind_decisions(self):
         out = self.lab("trace", self.write("t.tsv", "ts\tstage\n1\tsignal\n"), expect=1)
@@ -558,40 +560,114 @@ class Protocol(ProtocolCase):
         self.write("research/toy/KB/KNOWLEDGE.md", "# Knowledge\n\n" + "## Note\n- x\n" * 4000)
         self.assertIn("move older sections to KB/archive/", self.p("check"))
 
-    def test_holdout_files_lose_every_permission_and_are_checked(self):
+    def test_holdout_files_lose_every_permission_and_are_checked_without_opening(self):
         self.assertIn("protect needs the holdout files", self.p("holdout", "protect", expect=1))
         path = pathlib.Path(self.write("holdout_b.csv", "x"))
-        self.assertIn("no permissions until a look is open", self.p("holdout", "protect", str(path)))
+        self.assertIn("1 file(s)", self.p("holdout", "protect", str(path)))
         self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0)
         if os.geteuid() != 0:  # root reads anything
             with self.assertRaises(PermissionError):
                 path.read_text()
-        self.assertIn("holdout_b.csv: intact, sha256", self.p("holdout", "status"))
-        self.assertIn(", locked", self.p("holdout", "status"))
-        os.chmod(path, 0o644)
-        self.assertIn("was READABLE, locked again now", self.p("holdout", "status"))
-        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0)
-        os.chmod(path, 0o644)
-        self.assertIn("locked again: 1", self.p("holdout", "protect"))
-        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0)
-        os.chmod(path, 0o644)
-        path.write_text("y")
-        self.assertIn("CHANGED since it was protected", self.p("holdout", "status"))
+        self.assertIn("holdout_b.csv: 1 file(s), sha256", self.p("holdout", "status"))
+        self.assertIn(", locked, intact", self.p("holdout", "status"))
+        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0)  # status never opened it
         self.assertIn("no such file", self.p("holdout", "protect", str(self.dir / "nope.csv"), expect=1))
+        self.assertIn("1 path(s) protected before: locked", self.p("holdout", "protect", str(self.dir / "." / "holdout_b.csv")))
+        inner = self.write("sub/h.csv", "z")
+        self.p("holdout", "protect", inner)
+        self.assertIn("protected already, under another path", self.p("holdout", "protect", str(self.dir / "sub"), expect=1))
         self.assertIn("has not been looked at", self.p("holdout", "release", expect=1))
-        self.assertIn("released: " + str(path.resolve()), self.p("holdout", "release", "--force"))
+        out = self.p("holdout", "release", "--force")
+        self.assertIn(str(path.resolve()), out)
+        self.assertIn("recorded as exposed", out)
         self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o644)
         self.assertIn("nothing yet", self.p("holdout", "status"))
 
-    def test_a_holdout_folder_is_locked_with_everything_in_it(self):
+    def test_a_readable_holdout_is_locked_again_recorded_and_spent(self):
+        holdout = self.protect_holdout()
+        os.chmod(holdout, 0o644)  # someone gave it back
+        self.p("register", "E1")
+        out = self.series("E1", 0.5, 1)
+        self.assertIn("was readable outside a look: locked again and recorded", out)
+        self.assertEqual(stat.S_IMODE(holdout.stat().st_mode), 0)
+        self.assertIn("EXPOSED: found readable by run E1", self.p("holdout", "status"))
+        self.assertIn("WARN  holdout", self.p("check"))
+        self.assertIn("1 file(s) EXPOSED outside a look", self.p("status"))
+        self.p("judge", "E1")
+        self.p("review", "E1", "--verdict", "PASS", "--round", "R01")
+        self.p("best", "E1")
+        self.proven_verification()
+        self.assertIn("it is no holdout any more", self.p("holdout", "open", "E1", expect=1))
+        self.assertEqual(stat.S_IMODE(holdout.stat().st_mode), 0)
+
+    def test_a_forced_release_cannot_be_laundered_by_protecting_again(self):
+        holdout = self.protect_holdout()
+        self.p("holdout", "release", "--force")
+        self.p("holdout", "protect", str(holdout))
+        self.make_best("E1", 0.5, 1)
+        self.proven_verification()
+        self.assertIn("released before any look", self.p("holdout", "open", "E1", expect=1))
+
+    def test_a_holdout_changed_while_locked_spoils_the_look(self):
+        holdout = self.protect_holdout()
+        os.chmod(holdout, 0o644)
+        holdout.write_text("date,ret\n2026-01-02,0.5\n")
+        os.chmod(holdout, 0)
+        self.assertIn("1 CHANGED (size or time)", self.p("holdout", "status"))
+        self.make_best("E1", 0.5, 1)
+        self.proven_verification()
+        self.assertIn("the look is SPOILED", self.p("holdout", "open", "E1", expect=1))
+        self.assertEqual(stat.S_IMODE(holdout.stat().st_mode), 0)
+        self.assertIn("was SPOILED on it", self.p("holdout", "open", "E1", expect=1))
+
+    def test_no_run_while_a_look_is_open(self):
+        sys.path.insert(0, str(LAB.parent))
+        from labkit.ledger import Ledger
+        self.p("register", "E1")
+        Ledger(self.labdir).append("holdout_open", id="E9", candidate="c", budget=1, look=1, by="x")
+        self.assertIn("a holdout look is open (E9)", self.series("E1", 0.5, 1, expect=1))
+        self.assertIn("a holdout look for E9 is open since", self.p("check"))
+
+    def test_a_lock_that_does_not_take_is_never_recorded(self):
+        sys.path.insert(0, str(LAB.parent))
+        from unittest import mock
+        from labkit import holdout
+        from labkit.ledger import Ledger
+        path = pathlib.Path(self.write("holdout_b.csv", "x"))
+        self.labdir.mkdir(parents=True, exist_ok=True)
+        with mock.patch.object(holdout.os, "chmod", lambda *a, **k: None):
+            items, problems, _ = holdout.protect(Ledger(self.labdir), [str(path)])
+        self.assertEqual(items, [])
+        self.assertIn("could not take the permissions", problems[0])
+        self.assertEqual(holdout.entries(Ledger(self.labdir)), {})
+        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o644)
+
+    def test_a_holdout_folder_locks_each_file_and_gives_each_its_mode_back(self):
         self.write("hold/a.csv", "1")
         self.write("hold/deeper/b.csv", "2")
+        self.write("outside.csv", "3")
         folder = self.dir / "hold"
-        self.p("holdout", "protect", str(folder))
-        self.assertEqual(stat.S_IMODE(folder.stat().st_mode), 0)
-        self.assertIn("hold: intact", self.p("holdout", "status"))
+        os.chmod(folder / "a.csv", 0o600)
+        os.chmod(folder / "deeper" / "b.csv", 0o755)
+        os.symlink(self.dir / "outside.csv", folder / "link.csv")
+        self.assertIn("2 file(s)", self.p("holdout", "protect", str(folder)))
+        self.assertEqual(stat.S_IMODE((folder / "a.csv").stat().st_mode), 0)
+        self.assertEqual(stat.S_IMODE((self.dir / "outside.csv").stat().st_mode), 0o644)  # the link is not followed
+        self.assertIn("hold: 2 file(s)", self.p("holdout", "status"))
+        self.write("hold/new.csv", "4")
+        self.assertIn("1 added since, not protected", self.p("holdout", "status"))
         self.p("holdout", "release", "--force")
-        self.assertEqual((folder / "deeper" / "b.csv").read_text(), "2")
+        self.assertEqual(stat.S_IMODE((folder / "a.csv").stat().st_mode), 0o600)
+        self.assertEqual(stat.S_IMODE((folder / "deeper" / "b.csv").stat().st_mode), 0o755)
+
+    def test_a_holdout_under_git_must_be_untracked(self):
+        git = lambda *args: subprocess.run(["git", "-C", str(self.dir), *args], check=True, capture_output=True)
+        git("init", "-q")
+        path = pathlib.Path(self.write("data/holdout_b.csv", "x"))
+        git("add", "data/holdout_b.csv")
+        self.assertIn("tracked by git", self.p("holdout", "protect", str(path), expect=1))
+        git("rm", "-q", "--cached", "data/holdout_b.csv")
+        self.assertIn("is not in .gitignore", self.p("holdout", "protect", str(path)))
 
     def test_controls_spend_no_error_budget_and_no_trial(self):
         self.row("C0", "net_per_day < 1")
@@ -612,6 +688,8 @@ class Protocol(ProtocolCase):
         self.control("C0")
         self.p("register", "C0")
         self.assertIn("! below alpha", self.series("C0", 0.5, 3))  # a do-nothing control should show nothing
+        tests = [e for e in map(json.loads, (self.labdir / "LEDGER.jsonl").read_text().splitlines()) if e["kind"] == "stats"]
+        self.assertEqual(tests[0]["setting_alpha"], 0.05)  # the flag reads the research's own alpha
         self.assertIn("is a control", self.p("best", "C0", expect=1))
         self.control("C1")
         self.p("register", "C1")
