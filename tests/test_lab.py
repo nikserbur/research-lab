@@ -45,9 +45,9 @@ class Env(LabCase):
         out = self.lab("env", self.write("ENVIRONMENT.md", template), expect=1)
         self.assertIn("S1", out)
         self.assertIn("V5", out)
-        self.assertIn("0 of 12 requirements proven", out)
+        self.assertIn("0 of 13 requirements proven", out)
         out = self.lab("env", str(self.dir / "ENVIRONMENT.md"), "--stage", "sim", expect=1)
-        self.assertIn("0 of 7 requirements proven", out)
+        self.assertIn("0 of 8 requirements proven", out)
         self.assertNotIn("V1", out)
 
     def test_done_needs_evidence_and_na_needs_a_reason(self):
@@ -83,7 +83,7 @@ class Trace(LabCase):
                           "2026-03-02T09:59:00\tES\tsignal\tlong\tx\t2026-03-02T09:58:00\tx\t\n"
         out = self.lab("trace", self.write("trace.tsv", bad), expect=1)
         self.assertIn("look-ahead: inputs newer than the decision on 1 rows (first: line 6)", out)
-        self.assertIn("time goes back within a stream on 1 rows (first: line 7)", out)
+        self.assertIn("time goes back within a stage of a stream on 1 rows (first: line 7)", out)
 
     def test_self_reported_or_missing_inputs_ts_is_no_evidence(self):
         self.assertIn("inputs_ts equals ts on every row", self.lab("trace", self.write("t.tsv",
@@ -93,6 +93,16 @@ class Trace(LabCase):
         self.assertIn("ERROR no inputs_ts column", out)
         out = self.lab("trace", str(self.dir / "t.tsv"), "--min-delay", "0.5", expect=1)
         self.assertIn("less than 0.5 s before the decision", out)
+
+    def test_truncate_can_leave_out_stages_that_need_later_prices(self):
+        head = "ts\tstage\taction\tinputs\n"
+        full = self.write("full.tsv", head + "2026-01-05T16:00:00\tdecision\tlong\tx=1\n"
+                          "2026-01-06T09:30:00\tfill\tfilled\tcost=1\n2026-01-06T16:00:00\tdecision\tflat\tx=0\n")
+        cut = self.write("cut.tsv", head + "2026-01-05T16:00:00\tdecision\tlong\tx=1\n"
+                         "2026-01-06T09:30:00\tfill\tnot filled\tend of data\n")
+        self.assertIn("differs", self.lab("truncate", full, cut, "--at", "2026-01-06T12:00:00", expect=1))
+        self.assertIn("(stages decision)", self.lab("truncate", full, cut, "--at", "2026-01-06T12:00:00",
+                                                    "--stages", "decision"))
 
     def test_a_missing_file_is_a_message_not_a_traceback(self):
         out = self.lab("truncate", str(self.dir / "a.tsv"), str(self.dir / "b.tsv"), "--at", "1", expect=2)
@@ -108,6 +118,20 @@ class Trace(LabCase):
         self.assertNotIn("stage 'outcome'", out)
         self.assertIn("'filter'", out)  # a blank cell keeps the stage
         self.assertIn("'fill'", out)  # trace fields, as the template writes them
+
+    def test_an_outcome_stamped_when_known_is_not_time_going_back(self):
+        rows = ("ts\tstage\taction\tinputs\tinputs_ts\toutcome\n"
+                "2026-01-05T16:00:00\tsignal\trank\tx\t2026-01-05T16:00:00\t\n"
+                "2026-01-07T09:30:00\tresult\tmarked\tg\t2026-01-06T09:30:00\t1.2\n"
+                "2026-01-06T16:00:00\tsignal\trank\tx\t2026-01-06T16:00:00\t\n"
+                "2026-01-08T09:30:00\tresult\tmarked\tg\t2026-01-07T09:30:00\t0.4\n")
+        self.assertNotIn("time goes back", self.lab("trace", self.write("t.tsv", rows)))
+        last = rows + "2026-01-07T16:05:00\tresult\tunknown\t\t2026-01-07T16:00:00\t\n"  # not known yet
+        out = self.lab("trace", self.write("l.tsv", last))
+        self.assertNotIn("time goes back", out)
+        self.assertNotIn("empty inputs", out)
+        bad = rows.replace("2026-01-06T16:00:00\tsignal", "2026-01-04T16:00:00\tsignal")
+        self.assertIn("time goes back within a stage", self.lab("trace", self.write("b.tsv", bad), expect=1))
 
     def test_missing_columns_and_blind_decisions(self):
         out = self.lab("trace", self.write("t.tsv", "ts\tstage\n1\tsignal\n"), expect=1)
@@ -384,6 +408,20 @@ class Protocol(ProtocolCase):
         self.assertIn("fixed at 2", self.p("holdout", "open", "E1", "--budget", "3", expect=1))
         self.assertIn("look 1: E1 FAIL", self.p("holdout", "status"))
         self.assertIn("1 holdout look(s)", self.p("check"))
+
+    def test_a_score_per_case_outside_trading_is_tested_the_same_way(self):
+        self.p("settings", "--column", "cost_saving_pct")
+        self.p("register", "E1")
+        out = self.labdir / "results" / "E1"
+        script = self.write("weeks.py", "import sys, pathlib, random\nout = pathlib.Path(sys.argv[1]); out.mkdir(parents=True, exist_ok=True)\n"
+                            "r = random.Random(3); v = [1.0 + r.gauss(0, 1) for _ in range(60)]\n"
+                            "(out / 'scores.tsv').write_text('period\\tcost_saving_pct\\n' + ''.join(f'w{i:02d}\\t{x}\\n' for i, x in enumerate(v)))\n"
+                            "(out / 'metrics.tsv').write_text(f'net_per_trade\\ttrades\\n{sum(v)/60}\\t60\\n')\n")
+        said = self.p("run", "E1", "--code", script, "--", sys.executable, script, str(out))
+        self.assertIn("60 periods", said)
+        self.assertIn("a discovery", said)
+        end = [e for e in map(json.loads, (self.labdir / "LEDGER.jsonl").read_text().splitlines()) if e["kind"] == "run_end"]
+        self.assertTrue(end[0]["daily_sha"])  # the hash of scores.tsv, so a later edit is caught
 
     def test_settings_are_checked_and_fixed_before_the_first_run(self):
         self.assertIn("at most 0.1", self.p("settings", "--alpha", "0.5", expect=1))

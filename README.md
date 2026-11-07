@@ -65,7 +65,7 @@ flowchart LR
 flowchart TD
   G[Goal + your hard rules] --> PR[PROGRAM.md]
   PR --> SC[rl-source-scout:<br/>KB, code, papers, docs]
-  SC --> ENV[ENVIRONMENT.md:<br/>simulation S1-S7, verification V1-V5,<br/>each proven with evidence]
+  SC --> ENV[ENVIRONMENT.md:<br/>simulation S1-S8, verification V1-V5,<br/>each proven with evidence]
   ENV --> H[Round table: hypotheses<br/>effect · cost · pass criterion]
   H --> CR{reviewer: critique}
   CR -- cut / change --> H
@@ -118,23 +118,24 @@ Every run is tested as it ends, so a run nobody looked at still spends the error
 
 ### Simulation and verification environments
 
-Hypotheses run only in the simulation environment. A candidate judged PASS there is judged once in the verification environment. Both are written down in round 0 in [`ENVIRONMENT.md`](skills/research/ENVIRONMENT-TEMPLATE.md); the simulation requirements need evidence before round 1, the verification ones before a candidate's look:
+The environments are requirements, not software: research-lab brings no simulator. Your backtester, your replay of a business process (pricing, inventory, scheduling) or your training harness becomes the simulation environment once it meets the requirements with evidence; there candidates are tried and models learn. A candidate judged PASS there is judged once in the verification environment: held-out data or scenarios, or a paper or shadow run. Both are written down in round 0 in [`ENVIRONMENT.md`](skills/research/ENVIRONMENT-TEMPLATE.md), which also says how each requirement reads in trading, in a business process and for a model; the simulation requirements need evidence before round 1, the verification ones before a candidate's look:
 
 | Simulation | Verification |
 |---|---|
-| S1 point in time: the same decisions with the data cut at T | V1 holdout apart by time or entity, with a gap |
-| S2 costs and fills explicit and conservative | V2 candidate frozen: code, config, data hashes in the ledger |
+| S1 point in time: the same decisions with the input cut at T and everything derived from it rebuilt | V1 holdout apart by time, entity or scenario, with a gap |
+| S2 costs and limits of acting explicit and conservative | V2 candidate frozen: code, config, data hashes in the ledger |
 | S3 reproducible: same inputs, same files | V3 run by the reviewer, never by the controller |
-| S4 isolated: no live orders, no network, read-only data | V4 same environment, only the data differs |
-| S5 controls: nothing gives zero, a known case gives its numbers, a shuffled target gives no edge | V5 looks counted; over budget or after a failure: SPOILED |
+| S4 isolated: nothing real is driven, no network, read-only data | V4 same environment, only the cases differ (or every difference from the real system written down) |
+| S5 controls: nothing gives zero, a known case gives its numbers, a shuffled input gives no gain | V5 looks counted; over budget or after a failure: SPOILED |
 | S6 a decision trace: every decision, doing nothing included: what it looked at, did, why, what came of it | |
 | S7 units and conventions written down | |
+| S8 fidelity: the simulation reproduces measurements of the real system where they exist | |
 
 `lab.py` also checks the environments, where a script can:
 
 ```text
 lab.py env KB/ENVIRONMENT.md --stage sim                 # requirements without evidence (exit 1)
-lab.py truncate full/trace.tsv cut/trace.tsv --at 2026-03-02T12:50   # a look-ahead shows as a changed decision
+lab.py truncate full/trace.tsv cut/trace.tsv --at 2026-03-02T12:50 --stages signal,decision   # a look-ahead shows as a changed decision
 lab.py repro --out results/E0/metrics.tsv -- python3 scripts/03_sim.py   # rewrites the same files twice?
 lab.py trace results/E7/trace.tsv --expect KB/expect/E7.md   # time order, blind decisions, stages vs expectation
 lab.py sample results/E7/trace.tsv                       # best, worst, rare and random decisions to read
@@ -305,7 +306,7 @@ research/<slug>/              in your project, one folder per research
 ├── LEDGER.jsonl              registrations, runs, verdicts, holdout looks; hash-chained, lab.py only
 ├── sealed/                   verification reports, never indexed
 ├── scripts/                  numbered scripts, run from frozen copies
-└── results/<id>/             metrics.tsv, daily.tsv, trace.tsv, RUN.json, run.log, models, predictions
+└── results/<id>/             metrics.tsv, scores.tsv (or daily.tsv), trace.tsv, RUN.json, run.log, models
 
 ~/.claude/research-lab/       your data, a git repo
 ├── knowledge/                topic map, topics, projects, the index
@@ -352,7 +353,7 @@ See [SECURITY.md](SECURITY.md) and [docs/hooks.md](docs/hooks.md).
 - **v0.11.1.** The hooks and scripts are covered by tests, and the whole loop has run end to end once (below). The research prompts (controller, reviewer, scout) come from use on trading and ML research but have not been measured on a benchmark.
 - **The environment checks are as good as the runs behind them.** `lab.py truncate` finds a look-ahead only across the cut you choose, so cut at several times; whether costs are realistic is the reviewer's judgement, not a script's.
 - **The ledger guards against drift, not against a determined forger.** Hashes catch edits to registered rows, expectations and the ledger itself; nothing stops someone from rewriting the whole ledger, or from running experiments outside `lab.py`, though `check` flags results that were never registered.
-- **The statistics assume a value per period.** The deflated Sharpe and the bootstrap need `daily.tsv`; with fewer than 20 periods a run counts as a test with p = 1. LORD++ grows strict as runs pile up without a discovery, so a long research needs stronger evidence for each new result; that is the point, and it can make a real but small edge go unrecognised. Strongly persistent daily results (lag-one correlation near 0.9) are still called significant too often: 9% at 5% in simulation. LORD++'s guarantee assumes independent p-values, and runs on the same days are not. PBO by combinatorial cross-validation is not implemented.
+- **The statistics assume a score per case.** The deflated Sharpe (mean over standard deviation of the score) and the bootstrap need `scores.tsv` (or `daily.tsv`), one row per day, week or test case; with fewer than 20 cases a run counts as a test with p = 1. LORD++ grows strict as runs pile up without a discovery, so a long research needs stronger evidence for each new result; that is the point, and it can make a real but small edge go unrecognised. Strongly persistent daily results (lag-one correlation near 0.9) are still called significant too often: 9% at 5% in simulation. LORD++'s guarantee assumes independent p-values, and runs on the same days are not. PBO by combinatorial cross-validation is not implemented.
 - **research-lab does not bring a simulator.** It states the requirements and checks them; the simulator or pipeline is your project's.
 - **Claude Code only.** There are no adapters for Codex, Cursor or other hosts.
 - **Retrieval is strongest with an embedding model.** Without one (`kb_rag.py setup`) search is lexical plus hashed vectors: paraphrases are often missed and a question in another language than the notes finds nothing (0 of 5 in the benchmark). With one, such a question is still weak (2 of 5 in the top 3), so the output asks Claude to repeat it in the language of the notes. A search with a model takes 1-3 s and about 1 GB of memory on 10,000 chunks.

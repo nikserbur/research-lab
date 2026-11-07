@@ -34,7 +34,7 @@ KB/reviews/          R<NN>_<subject>.md from rl-hypothesis-reviewer
 KB/BRIEF_<date>.md   plain-language summary for the user, copied in once `lab.py brief` passes
 LEDGER.jsonl         the protocol's record: registrations, runs, verdicts, holdout looks (hash-chained)
 sealed/              verification reports; outside KB/, never indexed, never read by the controller
-scripts/ results/    numbered scripts (NN_name); results/<id>/ with metrics.tsv, daily.tsv, trace.tsv,
+scripts/ results/    numbered scripts (NN_name); results/<id>/ with metrics.tsv, scores.tsv, trace.tsv,
                      RUN.json, run.log
 STATUS.md            where the research stands, written by `lab.py status`; never edited by hand
 ```
@@ -96,16 +96,29 @@ every subagent gets.
    rewrite what the framework has). Conclusions to `KNOWLEDGE.md` with sources.
 
 ## 2. Environments (round 0, before any hypothesis)
-Fill `ENVIRONMENT.md` from the template. **Simulation**: how a run works here (command, data hash,
-commit, seeds, outputs) and requirements S1-S7. **Verification**: the holdout and its hash, who runs
-it, the look budget for the whole research (1 unless the user says otherwise), V1-V5. Use the
-project's own simulator or pipeline; write the missing pieces as numbered scripts only where it has
-none. Prove each requirement on the controls, not on a candidate (a proof run of a candidate shows its
-numbers before it is registered), and write the proof in Evidence:
-- S1: rebuild the data with everything after a time T removed **before the features are computed**, run
-  once on it and once on the full data, then `LAB truncate <full trace> <cut trace> --at T`. Cutting rows
-  out of a file of ready-made features proves nothing: a feature built from the future keeps its value.
-  A self-reported `inputs_ts` is no proof either;
+The environments are requirements and a way of working, not software: research-lab brings no
+simulator, and the method is the same for a trading strategy, a business process (pricing,
+inventory, scheduling), a controller or a trained model. The project's own simulator (a backtester, a
+replay of the business process, a training and evaluation harness) is the **simulation environment** once it meets the requirements
+with evidence: candidates are tried and models learn there, as often as the budget allows. The
+**verification environment** judges a frozen candidate once: held-out data, held-out scenarios or
+operating conditions, or the real system (a paper or shadow run, a pilot). Where the simulator falls
+short of a requirement, closing the gap is round 0's work, as numbered scripts or as an experiment
+on the simulator itself. A change to the simulator is an environment change: prove S1-S8 again on
+the controls and compare results only within one environment version.
+
+Fill `ENVIRONMENT.md` from the template. **Simulation**: how a run works here (command, data and
+scenario hashes, commit, seeds, environment version, outputs) and requirements S1-S8, with how each
+reads in this domain. **Verification**: the holdout and its hash, who runs it, the look budget for
+the whole research (1 unless the user says otherwise), V1-V5. Prove each requirement on the controls,
+not on a candidate (a proof run of a candidate shows its numbers before it is registered), and write
+the proof in Evidence. An `rl-executor` in mode `prove` runs the commands and reports their output:
+- S1: rebuild the input with everything after a time T removed **before anything is derived from it**
+  (features, filtered signals, a demand forecast), run once on it and once on the full input, then
+  `LAB truncate <full trace> <cut trace> --at T --stages <the stages that decide>`. Stages that need a
+  later value by nature (a fill at the next price, an outcome) are left out of the comparison. Cutting
+  rows out of ready-made features proves nothing: a feature built from the future keeps its value. A
+  self-reported `inputs_ts` is no proof either;
 - S3: `LAB repro --out <file> -- <command>`;
 - S5: the controls (do nothing, a shuffled target, a known case), registered in round `0` and run like
   any experiment. A round-0 experiment is a control: it spends no trial and no LORD++ position, needs no
@@ -113,12 +126,16 @@ numbers before it is registered), and write the proof in Evidence:
   once it runs, and the research's control runs are capped (`--max-controls`). A do-nothing or shuffled
   control whose p falls below alpha points at a leak or a bug, not at an edge;
 - S6: `LAB trace results/<id>/trace.tsv`; every decision is a row, including deciding to do nothing and the
-  last period, whose outcome is still unknown (a simulator that skips it hides a look-ahead at the cut).
+  last period, whose outcome is still unknown (a simulator that skips it hides a look-ahead at the cut);
+- S8: run the simulator on the conditions where the real system was measured and compare with the
+  measurements, in the region the candidates will use; a gap is written down with its size, and
+  either closed or carried into V4 as a known difference.
 
 Fix the statistics and the budgets once, before the first run: `LAB settings --lab <folder> --column
-pnl --block auto --alpha 0.05 --run-timeout <seconds> --max-trials <N> --max-controls <N>` (the value
-column of `daily.tsv`, the bootstrap block, the error rate, the same time for every run so results
-compare, the trials the whole research may spend, and the control runs, 10 unless set). Protect the holdout files as soon as they exist: `LAB holdout --lab <folder> protect <path> ...` records
+<score> --block auto --alpha 0.05 --run-timeout <seconds> --max-trials <N> --max-controls <N>` (the score
+column of `scores.tsv`, such as `pnl` or `cost_saving_pct`, the bootstrap block, the error rate, the
+same time for every run so results compare, the trials the whole research may spend, and the control
+runs, 10 unless set). Protect the holdout files as soon as they exist: `LAB holdout --lab <folder> protect <path> ...` records
 each file's hash and takes every permission from it until the reviewer opens a look. Make the holdout
 before `protect`, keep no other copy, keep it out of git (`protect` refuses a tracked file and warns
 about one `.gitignore` does not list), and tell every subagent its paths as never to be read; a hook
@@ -149,9 +166,10 @@ Write `KB/rounds/R<NN>.md` from the template, one row per hypothesis in its plan
   stage what the system should look at, what it should do, where the trace or a metric shows it and
   the expected value; what must not happen; the neighbouring parts the change may move.
 - The pass criterion is machine-readable, metric names from `metrics.tsv` joined by `&`:
-  `net_per_day > 0.05 & days >= 150`. It judges the simulation and later the shorter holdout, so write it
-  in rates (per day, per trade), not totals that only the long sample can reach, and make it strict
-  enough that noise rarely passes it.
+  `net_per_day > 0.05 & days >= 150`, `cost_saving_pct > 1.5 & fill_rate > 0.97 & weeks >= 26`.
+  It judges the simulation and later the shorter holdout, so write it in rates (per day, per trade,
+  per cycle), not totals that only the long sample can reach, and make it strict enough that noise
+  rarely passes it.
 - If several candidates may pass, write now how one is chosen (for example "compare E4 with E1 once,
   prefer E4 unless E1 is BETTER"): `LAB best` lets a later candidate replace the best only when it is
   better, so run that comparison before the first `best`.
@@ -170,7 +188,7 @@ in the round file's "Critique", and add the missing hypotheses it found. Skip on
    simulation environment only, never on the holdout, and replies in a few lines; a long run it
    starts in the background and you call it again in mode `collect`. You do not read logs yourself. `--code` names every file that makes the
    candidate; `metrics.tsv` holds one row of totals (aggregate seeds and days before writing it), and
-   `daily.tsv` one row per day or period (`period`, `pnl` or the value the strategy is judged on). It records the candidate hash and the attempt
+   `scores.tsv` one row per case (`period`: a day, a test cycle, an episode; and the score column). It records the candidate hash and the attempt
    (every attempt is a trial, crashes included), moves stale outputs aside, logs to
    `results/<id>/run.log`, and writes `RUN.json` and `DONE`. Nobody stops or touches other people's processes; no `pkill`.
 3. The executor checks the trace (`LAB trace results/<id>/trace.tsv --expect KB/expect/<id>.md`);
@@ -187,10 +205,11 @@ in the round file's "Critique", and add the missing hypotheses it found. Skip on
 ## 6. Judge and record
 `LAB judge --lab <folder> <id>` applies the registered criterion to the run's own `metrics.tsv` and
 prints PASS, FAIL or CRASH with the number of trials so far. Every run was also tested as it
-ended (`LAB stats --lab <folder> <id>` shows the record): the deflated Sharpe ratio against the best
-Sharpe that many tries of noise would show, a block-bootstrap p-value and interval over the days,
-the periods a deflated Sharpe of 0.95 would need, and whether the run is a discovery under LORD++,
-whose level for each run is fixed when it ends. A run without a usable `daily.tsv` is a test with
+ended (`LAB stats --lab <folder> <id>` shows the record) on its score per case: the mean over the
+standard deviation (the Sharpe ratio, in trading), deflated against the best that many tries of
+noise would show, a block-bootstrap p-value and interval over the cases, the cases a deflated
+Sharpe of 0.95 would need, and whether the run is a discovery under LORD++, whose level for each run
+is fixed when it ends. A run without a usable `scores.tsv` is a test with
 p = 1: untested runs spend the error budget too. Fill the row's result cells with what both printed
 and the artifact paths. A decision (`KEEP` / `DISCARD` / `ITERATE` / `INVALID`, `BEST` for
 the current best) waits for the review: `KEEP` needs the judge's PASS on the latest run and the
@@ -261,7 +280,7 @@ When an experiment trains or tunes a model:
   them, net of costs.
 - One change per experiment; an ablation for every component that stays.
 - At least three seeds for a claimed gain; report the spread. A gain inside the spread is noise.
-  Average the seeds into `metrics.tsv` and `daily.tsv`; the seeds themselves go next to them.
+  Average the seeds into `metrics.tsv` and `scores.tsv`; the seeds themselves go next to them.
 - A learning curve (data size against score) and the train-validation gap before a bigger model.
 - What the model uses: importance or ablation. An input that should not matter but does is a
   leakage suspect until the trace shows otherwise.

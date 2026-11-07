@@ -149,7 +149,7 @@ def suggestions(lab, ledger: Ledger, k: int) -> list:
             if node["state"] in ("crashed", "timed out") and not dropped(node):
                 out.append((f"fix the environment for control {id}", f"it {node['state']}: nothing compares until it runs"))
         elif node["state"] == "done" and lower(node) is None and not dropped(node):
-            out.append((f"fix the harness for {id}", "it ran but wrote no usable daily.tsv, so it could not be tested"))
+            out.append((f"fix the harness for {id}", "it ran but wrote no usable scores.tsv, so it could not be tested"))
     debug = [id for id, n in tree.items() if n["state"] == "crashed" and not n["children"] and not dropped(n)
              and not n["control"] and debug_depth(tree, id) <= MAX_DEBUG]
     out += [(f"debug {id}", f"it crashed (fix chain {debug_depth(tree, id)} of {MAX_DEBUG}); a fix is a child of it")

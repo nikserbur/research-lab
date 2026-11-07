@@ -210,7 +210,7 @@ def cmd_run(a) -> int:
     (out / "code").mkdir(parents=True, exist_ok=True)
     for p in a.code:
         shutil.copy2(p, out / "code" / p.replace("/", "__"))
-    for name in ("metrics.tsv", "trace.tsv", "daily.tsv"):  # a stale file must not pass for this run's output
+    for name in ("metrics.tsv", "trace.tsv", "scores.tsv", "daily.tsv"):  # a stale file must not pass for this run's output
         if (out / name).exists():
             (out / name).replace(out / f"{name}.previous")
     if (out / "DONE").exists():
@@ -270,7 +270,7 @@ def cmd_run(a) -> int:
     stop.set()
     seconds = round(time.time() - start, 1)
     ledger.append("run_end", id=a.id, exit=code, seconds=seconds, start_seq=entry["seq"], **ending,
-                  metrics_sha=sha256_file(out / "metrics.tsv"), daily_sha=sha256_file(out / "daily.tsv"))
+                  metrics_sha=sha256_file(out / "metrics.tsv"), daily_sha=sha256_file(selection.series_file(a.lab, a.id)))
     with contextlib.suppress(OSError):
         beat.unlink()
     info.update(end=datetime.datetime.now().isoformat(timespec="seconds"), exit=code, seconds=seconds)

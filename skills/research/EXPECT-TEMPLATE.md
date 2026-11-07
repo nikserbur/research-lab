@@ -5,18 +5,19 @@ Hypothesis: <H id, one line>. Pass criterion: <copied from EXPERIMENTS.tsv>.
 
 | Stage | Should look at | Should do | Shows in (trace field or metric) | Expected |
 |---|---|---|---|---|
-| signal | <inputs, e.g. order-book imbalance, last 5 s of trades> | <e.g. go long above 0.3> | <stage=signal, inputs, action> | <e.g. 40-60 signals a day> |
-| decision | | | | |
-| order | | | | |
-| fill | | | | |
-| position | | | | |
-| exit | | | | |
-| result | | | | |
+| <stage> | <inputs, e.g. order-book imbalance over the last 5 s> | <e.g. go long above 0.3> | <stage=<stage>, inputs, action> | <e.g. 40-60 signals a day> |
+| | | | | |
 
-For a model: data -> features -> prediction -> decision -> outcome, one row each.
+One row per stage the system goes through, in order. For example:
+- a trading system: signal -> decision -> order -> fill -> position -> exit -> result;
+- a business process: demand forecast -> decision (order, price, schedule) -> execution -> outcome;
+- a model or a controller: data or sensing -> features -> prediction or command -> outcome.
+A stage shown only in a metric (an outcome over the whole case) says so in "Shows in", and the trace
+check does not look for it.
 
 ## Must not happen
-- <e.g. orders in the first minute after the open; a position held overnight; a feature from the future>
+- <e.g. a feature from the future; an order above the limit; a decision using demand not yet known>
 
 ## Neighbours to watch
-Parts not under test that this change may still move: <other instruments, sessions, sides, risk limits, latency>.
+Parts not under test that this change may still move: <other operating regions, cases, segments,
+limits, latency>.

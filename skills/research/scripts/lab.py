@@ -14,7 +14,8 @@ Protocol (state lives in <lab>/LEDGER.jsonl, append-only and hash-chained; <lab>
                                                      no PATH locks the protected ones again)
     lab.py brief --lab DIR BRIEF.md                  every number in the brief traces to the record
 
-Selection (every run is tested as it ends on results/ID/daily.tsv: a `period` column and a value column):
+Selection (every run is tested as it ends on results/ID/scores.tsv, or daily.tsv: a `period` column, one row per
+case such as a day, a test cycle or an episode, and the score column):
     lab.py settings --lab DIR [--column pnl] [--block auto|N] [--alpha 0.05] [--run-timeout S] [--max-trials N]
                      [--max-controls N]
                                                      fixed for the whole research, before its first run
@@ -43,7 +44,10 @@ Environment:
                                                      requirements still unproven (exit 1 if any)
     lab.py trace results/E7/trace.tsv [--expect KB/expect/E7.md] [--min-delay SECONDS]
                                                      the decision trace is usable and looks only back
-    lab.py truncate FULL_TRACE CUT_TRACE --at T      decisions before T are the same with the data cut at T
+    lab.py truncate FULL_TRACE CUT_TRACE --at T [--stages signal,decision]
+                                                     decisions before T are the same with the data cut at T
+                                                     (--stages: only those; a fill or an outcome near the cut
+                                                     needs prices after it)
     lab.py sample results/E7/trace.tsv [--n 3] [--metric outcome] [--seed 0]
                                                      decisions for the reviewer to read one by one
     lab.py repro --out FILE [--out FILE ...] [--runs 2] [--timeout S] -- COMMAND ...
@@ -140,12 +144,20 @@ def cmd_trace(a) -> int:
             warnings.append(f"no {c} column: the reviewer cannot see {'what decisions looked at' if c == 'inputs' else c}")
     last, bad_ts, back, ahead, same = {}, [], [], [], 0
     delay = a.min_delay or 0.0
+    # a stage that records outcomes may end with rows whose outcome is not known yet (the last
+    # periods): they wait for a time of their own, so they are not on the stage's clock
+    scored = {str(r.get("stage", "")).lower() for r in rows if str(r.get("outcome") or "").strip()}
+    pending = lambda r: str(r.get("stage", "")).lower() in scored and not str(r.get("outcome") or "").strip()
     for n, r in enumerate(rows, 2 if pathlib.Path(a.file).suffix not in (".jsonl", ".json") else 1):
         t = when(r.get("ts"))
         if t is None:
             bad_ts.append(n)
             continue
-        stream = r.get("stream", "")
+        if pending(r):
+            continue
+        # each stage of a stream is its own clock: an outcome is stamped when it is known, after the
+        # next decision's signal, so rows of different stages may interleave
+        stream = (r.get("stream", ""), str(r.get("stage", "")).lower())
         if stream in last and t < last[stream]:
             back.append(n)
         last[stream] = max(t, last.get(stream, t))
@@ -156,7 +168,7 @@ def cmd_trace(a) -> int:
     if bad_ts and "ts" in columns:
         errors.append(f"{len(bad_ts)} rows with an unreadable ts (first: line {bad_ts[0]})")
     if back:
-        errors.append(f"time goes back within a stream on {len(back)} rows (first: line {back[0]})")
+        errors.append(f"time goes back within a stage of a stream on {len(back)} rows (first: line {back[0]})")
     if ahead:
         what = f"less than {delay:g} s before the decision" if a.min_delay else "newer than the decision"
         errors.append(f"look-ahead: inputs {what} on {len(ahead)} rows (first: line {ahead[0]})")
@@ -167,7 +179,7 @@ def cmd_trace(a) -> int:
         warnings.append("inputs_ts equals ts on every row: self-reported, not evidence for S1; "
                         "prove it with `lab.py truncate` or give --min-delay")
     if rows and "inputs" in columns:
-        blind = sum(1 for r in rows if not str(r.get("inputs") or "").strip())
+        blind = sum(1 for r in rows if not str(r.get("inputs") or "").strip() and not pending(r))
         if blind:
             warnings.append(f"{blind} decisions do not say what they looked at (empty inputs)")
     stages = collections.Counter(str(r.get("stage", "")).lower() for r in rows if r.get("stage"))
@@ -230,10 +242,13 @@ def numeric(value) -> bool:
         return False
 
 
-def decisions_before(path: pathlib.Path, cut: float, at_is_number: bool):
-    """{stream: [decision, ...]} before the cut, the number of rows at or after it, and problems."""
+def decisions_before(path: pathlib.Path, cut: float, at_is_number: bool, stages=None):
+    """{stream: [decision, ...]} before the cut, the number of rows at or after it, and problems.
+    `stages` limits the rows to those stages (rows of other stages are skipped)."""
     keep, out, after, problems = ("ts", "stage", "action", "inputs"), {}, 0, []
     for n, r in enumerate(read_trace(path), 1):
+        if stages and str(r.get("stage", "")).lower() not in stages:
+            continue
         t = when(r.get("ts"))
         if t is None:
             problems.append(f"{path}: decision {n} has an unreadable ts {r.get('ts')!r}")
@@ -254,8 +269,9 @@ def cmd_truncate(a) -> int:
     if pathlib.Path(a.full).read_bytes() == pathlib.Path(a.cut).read_bytes():
         print("! the two traces are the same file content: run once with the full data and once with the data cut at --at")
         return 1
-    full, _, bad_full = decisions_before(pathlib.Path(a.full), cut, numeric(a.at))
-    short, after, bad_cut = decisions_before(pathlib.Path(a.cut), cut, numeric(a.at))
+    stages = {s.strip().lower() for s in (a.stages or "").split(",") if s.strip()}
+    full, _, bad_full = decisions_before(pathlib.Path(a.full), cut, numeric(a.at), stages)
+    short, after, bad_cut = decisions_before(pathlib.Path(a.cut), cut, numeric(a.at), stages)
     if bad_full or bad_cut:
         for problem in bad_full + bad_cut:
             print(f"! {problem}")
@@ -278,7 +294,8 @@ def cmd_truncate(a) -> int:
             return 1
     if after:
         print(f"WARN  the cut trace has {after} decisions at or after {a.at}: was the data really cut there?")
-    print(f"same {total} decisions before {a.at} with the data cut there: no look-ahead across the cut")
+    print(f"same {total} decisions before {a.at} with the data cut there"
+          + (f" (stages {', '.join(sorted(stages))})" if stages else "") + ": no look-ahead across the cut")
     return 0
 
 
@@ -407,6 +424,7 @@ def main(argv=None) -> int:
     s.add_argument("full")
     s.add_argument("cut")
     s.add_argument("--at", required=True)
+    s.add_argument("--stages", help="compare only these stages, comma-separated (e.g. signal,decision)")
     s = sub.add_parser("sample")
     s.add_argument("file")
     s.add_argument("--n", type=int, default=3)

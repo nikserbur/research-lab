@@ -29,37 +29,44 @@ and trace samples, the processes that are running right now, the resource limits
 5. The previous review in `RES/reviews/`: what it recommended and whether that was done.
 
 ## Mode "review": check in this order
-1. **Leakage.** Features use only data available at decision time; the target is not among
-   the features; training data strictly precedes the predicted period; thresholds and parameters
-   are not tuned on test data; any feature or alpha selection period is excluded from the
-   "honest" out-of-sample window. Check row alignment of every join (cbind by order is a classic).
-2. **Cost and fill model.** Fees and taxes as the program states them, the side and price of
-   every fill, units, conservative vs optimistic assumptions. Say where the backtest can still
-   be optimistic and by how much.
-3. **Simulation assumptions.** List each one, estimate how it can move the conclusion and in
-   which direction. Check that requirements S1-S7 of `ENVIRONMENT.md` hold for these runs, not
-   only for the control run that proved them.
+1. **Leakage.** Decisions use only what the real system would know at that moment: features from
+   data available at decision time, commands from sensor values up to now (no preview of the
+   demand or the scenario); the target is not among the inputs; training data strictly precedes the
+   predicted period; thresholds and parameters are not tuned on test data or verification cases;
+   any feature or alpha selection period is excluded from the "honest" out-of-sample window. Check
+   row alignment of every join (cbind by order is a classic).
+2. **Costs and limits of acting.** What each decision pays and what the real system cannot do, as
+   the program and ENVIRONMENT.md S2 state them: fees, the side and price of every fill; actuator
+   ranges and rates, sensor noise and lag, safety limits; units; conservative vs optimistic
+   assumptions. Say where the simulation can still be optimistic and by how much.
+3. **Simulation assumptions and fidelity.** List each assumption, estimate how it can move the
+   conclusion and in which direction. Check that requirements S1-S8 of `ENVIRONMENT.md` hold for
+   these runs, not only for the control run that proved them, and that the candidates stay in the
+   region where S8 compared the simulator with measurements: a gain found where the model was never
+   checked against the real system is a hypothesis about the model, not about the system.
 4. **Independent recomputation** of 2-3 headline numbers from the saved artifacts with your own
    short script (done first, see above). If a number does not match, find out why before anything
    else. Say how many trials the research has run and what that does to the best result: read the
    `lab.py stats` record of each run (deflated Sharpe, block-bootstrap interval, periods needed,
    LORD++ decision) and `lab.py fdr`; a result that is not a discovery is not evidence, however it
    looks. Check that the research fixed its settings before its first run (`lab.py settings`: the
-   value column, the block, alpha, the time budget per run and the trial budget), and read
+   score column, the block, alpha, the time budget per run and the trial budget), and read
    `lab.py tree` to see what each experiment changed relative to its parent.
 5. **Expected against actual, stage by stage.** For every row of `expect/<id>.md`: what the system
    was meant to look at and do, what the trace shows it looked at (`inputs`) and did (`action`,
    `reason`, `outcome`), on the sampled decisions one by one (best, worst, rare, random) and in
    aggregate. Name each discrepancy with trace line numbers. Look sideways too: the "Must not
    happen" list and the "Neighbours to watch", and anything else that moved and was not under test
-   (other instruments, sessions, sides, times of day, segments). A result that met its criterion
+   (other instruments, sessions, sides, times of day, segments, operating regions, test cycles). A result that met its criterion
    for the wrong reason is a discrepancy. Each one becomes a hypothesis: the mechanism you suspect,
    the cheapest test, its expected effect and pass criterion.
 6. **Decomposition into causes.** Split the result into its components (for trading: spread
-   capture - fees - adverse selection - inventory drift - exit cost; for ML: by segment, day,
-   window, side). Show where it is earned and where it is lost; isolate the tails.
-7. **Significance.** Overlapping targets and correlated configs inflate t-stats and "N of N
-   days": give an honest statistic (block by day or window, paired differences).
+   capture - fees - adverse selection - inventory drift - exit cost; for a business process: by
+   site, product, week, constraint that binds; for ML: by segment, day, window, side). Show
+   where it is earned and where it is lost; isolate the tails.
+7. **Significance.** Overlapping targets, correlated cases and correlated configs inflate t-stats
+   and "N of N days": give an honest statistic (block by day, window or cycle; paired differences
+   against the baseline on the same cases).
 8. **Conclusions vs data.** Is every claim in `KNOWLEDGE.md` about these experiments backed by
    numbers? Where is a claim stronger than the data?
 9. **User rules.** Any proposal or result that breaks a hard rule or revives a rejected

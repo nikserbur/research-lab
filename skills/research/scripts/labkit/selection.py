@@ -1,8 +1,8 @@
 """Selection: what may be called the best result once many things have been tried.
 
-Every `lab.py run` is a test. When it ends, the run's `results/<id>/daily.tsv` (a header, then one
-row per day or period with a `period` column and the value column) is tested at once, under the
-ledger's lock: deflated Sharpe against the best of all trials so far, a block-bootstrap p-value and
+Every `lab.py run` is a test. When it ends, the run's `results/<id>/scores.tsv` (`daily.tsv` in
+older researches: a header, then one row per case, a day, a test cycle or an episode, with a `period`
+column and the score column) is tested at once, under the ledger's lock: deflated Sharpe against the best of all trials so far, a block-bootstrap p-value and
 interval, and the LORD++ level for this place in the sequence of runs. A run without a usable
 series is a test with p = 1, so untested runs still spend the error budget. The settings (value
 column, block length, alpha) are fixed for the whole research before its first run. Nothing here
@@ -57,6 +57,12 @@ def read_series(path: pathlib.Path, column: str) -> dict:
     return out
 
 
+def series_file(lab: pathlib.Path, id: str) -> pathlib.Path:
+    """The run's score per case: scores.tsv, or daily.tsv as older researches and trading projects name it."""
+    out = lab / "results" / id
+    return out / "scores.tsv" if (out / "scores.tsv").exists() or not (out / "daily.tsv").exists() else out / "daily.tsv"
+
+
 def block_for(values: list, setting) -> float:
     return stats.auto_block(values) if setting == "auto" else min(max(float(setting), 1.0), len(values) / 4)
 
@@ -72,7 +78,7 @@ def configs_of(lab: pathlib.Path, id: str) -> int:
 
 def record_test(lab: pathlib.Path, ledger: Ledger, id: str, run: dict, exit_code: int) -> dict:
     """Test one finished run and append the result; called by `lab.py run` as it ends."""
-    path, configs = lab / "results" / id / "daily.tsv", configs_of(lab, id)
+    path, configs = series_file(lab, id), configs_of(lab, id)
     row = journal(lab).get(id, {})
 
     def compute(led: Ledger) -> dict:
@@ -209,13 +215,13 @@ def cmd_compare(a) -> int:
     if not done:
         settings = research_settings(ledger)
         try:
-            new = read_series(a.lab / "results" / a.new / "daily.tsv", settings["column"])
-            old = read_series(a.lab / "results" / a.old / "daily.tsv", settings["column"])
+            new = read_series(series_file(a.lab, a.new), settings["column"])
+            old = read_series(series_file(a.lab, a.old), settings["column"])
         except (OSError, ValueError) as e:
             return fail(str(e))
-        if sha256_file(a.lab / "results" / a.new / "daily.tsv") != new_test["daily_sha"] or \
-                sha256_file(a.lab / "results" / a.old / "daily.tsv") != old_test["daily_sha"]:
-            return fail("a daily.tsv changed after its run was tested")
+        if sha256_file(series_file(a.lab, a.new)) != new_test["daily_sha"] or \
+                sha256_file(series_file(a.lab, a.old)) != old_test["daily_sha"]:
+            return fail("a scores file changed after its run was tested")
         if set(new) != set(old):
             return fail(f"{a.new} and {a.old} cover different periods ({len(set(new) - set(old))} only in {a.new}, "
                         f"{len(set(old) - set(new))} only in {a.old}): compare them on the same days")
