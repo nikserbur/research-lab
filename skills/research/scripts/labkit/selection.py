@@ -3,7 +3,9 @@
 Every `lab.py run` is a test. When it ends, the run's `results/<id>/scores.tsv` (`daily.tsv` in
 older researches: a header, then one row per case, a day, a test cycle or an episode, with a `period`
 column and the score column) is tested at once, under the ledger's lock: deflated Sharpe against the best Sharpe that as many tries of noise would show, a
-block-bootstrap p-value and interval, and the LORD++ level for this place in the sequence of runs.
+block-bootstrap p-value and interval, and the online false discovery rate level for this place in the
+sequence of runs: e-LOND, which holds however the runs depend on each other (they share their days),
+or LORD++ in a research that tested runs with it before and has not taken e-LOND (`lab.py upgrade --e-lond`).
 The noise benchmark uses the variance of a Sharpe estimate whose true value is 0 (1/n), not the spread
 of the trials' Sharpe ratios: one trial that loses heavily to costs would otherwise raise the bar for
 every later one. The trial count only grows, so `best` and `holdout open` deflate again with the count
@@ -31,11 +33,31 @@ MAX_ALPHA = 0.1
 DEFAULTS = {"column": "pnl", "block": "auto", "alpha": 0.05, "run_timeout": None, "max_trials": None, "max_controls": 10,
             "scenarios": "", "select_by": ""}
 VERDICTS = ("PASS", "BLOCK")
+METHODS = {"e-lond": "e-LOND", "lord++": "LORD++"}
 
 
 def research_settings(ledger: Ledger) -> dict:
     found = ledger.last("settings")
     return {k: found.get(k, v) for k, v in DEFAULTS.items()} if found else dict(DEFAULTS)
+
+
+def fdr_method(ledger: Ledger) -> str:
+    """The research's online false discovery rate control: e-LOND, unless it tested runs under LORD++
+    (before research-lab 0.13.0) and has not taken e-LOND with `lab.py upgrade --e-lond`. A switch
+    applies to later runs only: every decision recorded stays."""
+    taken = next((e["fdr"] for e in reversed(ledger.find("protocol")) if e.get("fdr")), None)
+    if taken:
+        return taken
+    return "lord++" if any("fdr" not in e and not e.get("control") for e in ledger.find("stats")) else "e-lond"
+
+
+def method_of(e: dict) -> str:
+    return METHODS[e.get("fdr", "lord++")]
+
+
+def level_of(e: dict) -> float:
+    """The p-value a recorded test had to reach: e-LOND's alpha_t / l_t, or the LORD++ level."""
+    return e.get("level", e.get("lord_level", 0.0))
 
 
 def read_series(path: pathlib.Path, column: str) -> dict:
@@ -101,12 +123,12 @@ def record_test(lab: pathlib.Path, ledger: Ledger, id: str, run: dict, exit_code
     row = journal(lab).get(id, {})
 
     def compute(led: Ledger) -> dict:
-        settings = research_settings(led)
+        settings, method = research_settings(led), fdr_method(led)
         control = bool(run.get("control"))
         prior = [e for e in led.find("stats") if not e.get("control")]  # controls test the environment, not ideas
         trials = trial_count(led) + configs - 1  # this run's own sweep is not in the record yet
         fields = {"id": id, "run_seq": run["seq"], "candidate": run["candidate"], "round": row.get("round", ""),
-                  "configs": configs, "trials": trials, "control": control,
+                  "configs": configs, "trials": trials, "control": control, "fdr": method,
                   **{f"setting_{k}": v for k, v in settings.items()}}
         try:
             if exit_code == 124:
@@ -136,11 +158,15 @@ def record_test(lab: pathlib.Path, ledger: Ledger, id: str, run: dict, exit_code
                           dsr=stats.psr(sr, benchmark, n, skew, kurt), block=block, p=boot["p"], lo=boot["lo"],
                           hi=boot["hi"], periods_for_dsr95=n95 if math.isfinite(n95) else None,
                           daily_sha=sha256_file(path))
-        if control:  # outside the error budget: a control spends no LORD++ position
-            fields.update(lord_level=0.0, discovery=False)
-        else:
+        if control:  # outside the error budget: a control spends no position
+            fields.update(level=0.0, discovery=False)
+        elif method == "lord++":
             level, found = stats.lord_levels([e["p"] for e in prior] + [fields["p"]], settings["alpha"])[-1]
             fields.update(lord_level=level, discovery=found)
+        else:  # the position and the discoveries as recorded, so a switch from LORD++ keeps its decisions
+            test = stats.elond_test(fields["p"], len(prior) + 1, sum(1 for e in prior if e.get("discovery")),
+                                    settings["alpha"], settings["max_trials"])
+            fields.update(test)
         return fields
 
     return ledger.append("stats", compute=compute)
@@ -148,18 +174,19 @@ def record_test(lab: pathlib.Path, ledger: Ledger, id: str, run: dict, exit_code
 
 def describe(e: dict) -> list:
     if e.get("sharpe") is None:
-        return [f"{e['id']}: {e.get('note', 'not tested')}; " + ("a control, so it spends no trial or LORD++ position"
+        return [f"{e['id']}: {e.get('note', 'not tested')}; " + ("a control, so it spends no trial or test position"
                 if e.get("control") else f"counts as a test with p = 1 (trial {e['trials']})")]
     alpha = e.get("setting_alpha") or DEFAULTS["alpha"]
     lines = [f"{e['id']}: {e['n']} periods, mean {e['mean']:.4g} (95% interval {e['lo']:.4g} to {e['hi']:.4g}, "
              f"block {e['block']:.1f}), Sharpe {e['sharpe']:.3f} per period",
              f"  {e['trials']} trials so far: noise alone would show a best Sharpe of {e['sharpe_noise_best']:.3f}; "
              f"deflated Sharpe {e['dsr']:.3f} (against 0: {e['psr']:.3f})",
-             (f"  a control: it tests the environment and spends no LORD++ position; p(mean > 0) {e['p']:.2e}" +
+             (f"  a control: it tests the environment and spends no test position; p(mean > 0) {e['p']:.2e}" +
               (f"\n  ! below alpha {alpha:g}: right for a known case, a leak or a bug for doing nothing or a "
                "shuffled target" if e["p"] < alpha else "") if e.get("control") else
-              f"  p(mean > 0) {e['p']:.2e}; LORD++ level {e['lord_level']:.2e}: "
-              f"{'a discovery' if e['discovery'] else 'not a discovery'}")]
+              f"  p(mean > 0) {e['p']:.2e}; {method_of(e)} level {level_of(e):.2e}"
+              + (f" (test {e['position']}, e-value {e['e_value']:.3g})" if "e_value" in e else "")
+              + f": {'a discovery' if e['discovery'] else 'not a discovery'}")]
     if e["dsr"] < MIN_DSR:
         need = e.get("periods_for_dsr95")
         lines.append(f"  deflated Sharpe below {MIN_DSR}: " + (f"about {math.ceil(need)} periods would be needed "
@@ -296,7 +323,7 @@ def problems_of(lab: pathlib.Path, ledger: Ledger, id: str, trials: int) -> list
         problems.append("its latest run has no tested series")
     else:
         if not test["discovery"]:
-            problems.append(f"not a discovery under LORD++ (p {test['p']:.2e} against level {test['lord_level']:.2e})")
+            problems.append(f"not a discovery under {method_of(test)} (p {test['p']:.2e} against level {level_of(test):.2e})")
         if dsr_now(test, trials) < MIN_DSR:
             problems.append(f"deflated Sharpe {dsr_now(test, trials):.3f} is below {MIN_DSR} after {max(trials, test['trials'])} trials")
     settings = research_settings(ledger)
@@ -336,13 +363,8 @@ def choose(lab: pathlib.Path, ledger: Ledger, cands: dict, settings: dict):
         except (OSError, ValueError) as e:
             left_out.append((id, str(e)))
     order = {e["id"]: e["seq"] for e in ledger.find("register")}
-    shared = None
-    for id in sorted(series, key=lambda i: (-len(series[i]), order.get(i, 0))):  # the longest first
-        both = [k for k in (shared if shared is not None else series[id]) if k in series[id]]
-        if len(both) < max(MIN_PERIODS, (len(shared) if shared else len(series[id])) // 2):
-            left_out.append((id, f"shares {len(both)} periods with the others: compare it on its own window"))
-            continue
-        shared = both
+    shared, apart = align(series, order)
+    left_out += apart
     kept = {id: v for id, v in series.items() if id not in dict(left_out)}
     if not kept:
         return None, "no candidate can be compared: " + "; ".join(f"{i}: {why}" for i, why in left_out)
@@ -359,6 +381,20 @@ def choose(lab: pathlib.Path, ledger: Ledger, cands: dict, settings: dict):
         return sign * metrics[name]  # present: problems_of requires it
     winner = max(members, key=lambda id: (value(id), -order.get(id, 0)))
     return winner, (members, dropped, value(winner), len(shared), left_out)
+
+
+def align(series: dict, order: dict) -> tuple:
+    """(the periods the series share, in the longest one's order; [(id, why), ...] left out). The longest
+    series sets the periods; one that shares fewer than half of them, or fewer than MIN_PERIODS, is left
+    out rather than shrinking the comparison for all."""
+    shared, left_out = None, []
+    for id in sorted(series, key=lambda i: (-len(series[i]), order.get(i, 0))):  # the longest first
+        both = [k for k in (shared if shared is not None else series[id]) if k in series[id]]
+        if len(both) < max(MIN_PERIODS, (len(shared) if shared else len(series[id])) // 2):
+            left_out.append((id, f"shares {len(both)} periods with the others: compare it on its own window"))
+            continue
+        shared = both
+    return shared or [], left_out
 
 
 def fmean_of(values: dict, t: int) -> float:
@@ -381,7 +417,8 @@ def cmd_best(a) -> int:
     cands = eligible(a.lab, ledger)
     if not cands:
         return fail("no candidate can be BEST yet: each needs a judge PASS and a reviewer PASS on its latest run, "
-                    f"a LORD++ discovery and a deflated Sharpe of {MIN_DSR} after the trials so far")
+                    f"a discovery under {METHODS[fdr_method(ledger)]} and a deflated Sharpe of {MIN_DSR} after the "
+                    "trials so far")
     settings = research_settings(ledger)
     winner, detail = choose(a.lab, ledger, cands, settings)
     if winner is None:
@@ -426,10 +463,14 @@ def cmd_fdr(a) -> int:
     for group in rounds.values():
         for e, keep in zip(group, stats.benjamini_yekutieli([e["p"] for e in group], alpha)):
             within[e["seq"]] = keep
-    print("id\tround\tp\tLORD++ level\tdiscovery\tBY in round")
+    print("id\tround\tp\ttest\tlevel\te-value\tdiscovery\tBY in round")
     for e in tests:
-        print(f"{e['id']}\t{e.get('round', '')}\t{e['p']:.2e}\t{e['lord_level']:.2e}\t"
-              f"{'yes' if e['discovery'] else 'no'}\t{'yes' if within[e['seq']] else 'no'}")
-    print(f"{len(tests)} tests (one per run), {sum(e['discovery'] for e in tests)} discoveries under LORD++ "
-          f"at alpha {alpha:g}; each level was fixed when its run ended")
+        print(f"{e['id']}\t{e.get('round', '')}\t{e['p']:.2e}\t{method_of(e)}\t{level_of(e):.2e}\t"
+              + (f"{e['e_value']:.3g}" if "e_value" in e else "-")
+              + f"\t{'yes' if e['discovery'] else 'no'}\t{'yes' if within[e['seq']] else 'no'}")
+    methods = " then ".join(dict.fromkeys(method_of(e) for e in tests))
+    print(f"{len(tests)} tests (one per run), {sum(e['discovery'] for e in tests)} discoveries under {methods} "
+          f"at alpha {alpha:g}; each level was fixed when its run ended"
+          + ("; e-LOND holds under any dependence between the runs" if "e-LOND" in methods else
+             "; LORD++ assumes independent tests (`lab.py upgrade --e-lond` for later runs)"))
     return 0

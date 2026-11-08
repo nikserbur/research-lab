@@ -2,7 +2,9 @@
 """The research loop's protocol and environment checks. Standard library only, Python 3.9+.
 
 Protocol (state lives in <lab>/LEDGER.jsonl, append-only and hash-chained; <lab> is research/<slug>):
-    lab.py register --lab DIR ID                     fix the journal row and expect/ID.md; parse the criterion
+    lab.py register --lab DIR ID [--dry-run]         fix the journal row and expect/ID.md; parse the criterion;
+                                                     how often it passes noise and a shrunk in-sample edge
+                                                     (--dry-run: the checks and that report, nothing recorded)
     lab.py run --lab DIR ID [--code F] [--config F] [--data F] [--again] -- COMMAND ...
                                                      run it, record the candidate hash and every attempt
     lab.py judge --lab DIR ID                        apply the registered criterion to results/ID/metrics.tsv
@@ -21,7 +23,7 @@ case such as a day, a test cycle or an episode, and the score column):
                      [--select-by METRIC]
                                                      fixed for the whole research, before its first run
     lab.py stats --lab DIR ID                        the recorded test of the latest run: deflated Sharpe after N
-                                                     trials, block-bootstrap p and interval, LORD++ decision
+                                                     trials, block-bootstrap p and interval, e-LOND decision
     lab.py compare --lab DIR NEW OLD                 paired on the same periods: better outside the interval? (once;
                                                      a diagnostic: BEST comes from the selection)
     lab.py review --lab DIR ID --verdict PASS|BLOCK --round R03
@@ -29,10 +31,18 @@ case such as a day, a test cycle or an episode, and the score column):
     lab.py best --lab DIR [ID]                       one selection over every candidate with a PASS, a reviewer
                                                      PASS, a discovery and DSR >= 0.95: the model confidence set
                                                      of their scores, then --select-by (settings) within it
-    lab.py fdr --lab DIR                             every test with its LORD++ decision and Benjamini-Yekutieli by round
+    lab.py fdr --lab DIR                             every test with its e-LOND (or LORD++) decision and
+                                                     Benjamini-Yekutieli by round
+    lab.py pbo --lab DIR [ID ...] [--blocks S] [--stat sharpe|mean]
+                                                     the probability of backtest overfitting of the runs (all
+                                                     tested ones by default) by combinatorially symmetric
+                                                     cross-validation on their shared periods; recorded once
     lab.py explore --lab DIR --n N --what TEXT       configurations judged outside lab.py run (recon, a reviewer's
                                                      re-runs): they count as trials for every later deflated Sharpe
-    lab.py upgrade --lab DIR --reason TEXT           take a changed research-lab protocol into this research
+    lab.py upgrade --lab DIR --reason TEXT [--e-lond]
+                                                     take a changed research-lab protocol into this research
+                                                     (--e-lond: a research begun under LORD++ tests its later
+                                                     runs by e-LOND; earlier decisions stay)
     lab.py close --lab DIR --reason TEXT [--without-look TEXT] [--reopen]
                                                      the stop, in the ledger; an unlooked BEST needs its reason
 
@@ -80,7 +90,7 @@ import re
 import subprocess
 import sys
 
-from labkit import protocol, selection, status, tables, tree, worktree
+from labkit import pbo, protocol, selection, status, tables, tree, worktree
 
 REQUIRED = ("ts", "stage", "action")
 EXPECTED = ("inputs", "reason", "outcome")
@@ -376,8 +386,10 @@ def main(argv=None) -> int:
         command, argv = argv[argv.index("--") + 1:], argv[:argv.index("--")]
     p = argparse.ArgumentParser(prog="lab.py", description=__doc__.splitlines()[0])
     sub = p.add_subparsers(dest="cmd", required=True)
-    for name in ("register", "judge"):
-        with_lab(sub, name).add_argument("id")
+    s = with_lab(sub, "register")
+    s.add_argument("id")
+    s.add_argument("--dry-run", action="store_true", help="the checks and the power report, nothing recorded")
+    with_lab(sub, "judge").add_argument("id")
     s = with_lab(sub, "run")
     s.add_argument("id")
     for flag in ("--code", "--config", "--data"):
@@ -407,7 +419,9 @@ def main(argv=None) -> int:
     s.add_argument("--n", type=int, required=True, help="configurations judged against outcomes")
     s.add_argument("--what", required=True)
     s.add_argument("--by", default="controller")
-    with_lab(sub, "upgrade").add_argument("--reason", required=True)
+    s = with_lab(sub, "upgrade")
+    s.add_argument("--reason", required=True)
+    s.add_argument("--e-lond", action="store_true", help="test later runs by e-LOND (a research begun under LORD++)")
     s = with_lab(sub, "close")
     s.add_argument("--reason", required=True)
     s.add_argument("--without-look", help="why the BEST was not looked at on the holdout")
@@ -431,6 +445,10 @@ def main(argv=None) -> int:
     s.add_argument("--round", default="")
     s.add_argument("--by", default="rl-hypothesis-reviewer")
     with_lab(sub, "fdr")
+    s = with_lab(sub, "pbo")
+    s.add_argument("ids", nargs="*", help="the runs to compare (default: every tested experiment but the controls)")
+    s.add_argument("--blocks", type=int, help="S, even, at most 16 (default: 16, fewer on a short window)")
+    s.add_argument("--stat", choices=("sharpe", "mean"), default="sharpe")
     with_lab(sub, "jobs")
     with_lab(sub, "status")
     s = sub.add_parser("env")
@@ -462,7 +480,7 @@ def main(argv=None) -> int:
     return {"register": protocol.cmd_register, "run": protocol.cmd_run, "judge": protocol.cmd_judge,
             "check": protocol.cmd_check, "holdout": protocol.cmd_holdout, "brief": protocol.cmd_brief,
             "settings": selection.cmd_settings, "stats": selection.cmd_stats, "compare": selection.cmd_compare,
-            "review": selection.cmd_review, "best": selection.cmd_best, "fdr": selection.cmd_fdr,
+            "review": selection.cmd_review, "best": selection.cmd_best, "fdr": selection.cmd_fdr, "pbo": pbo.cmd_pbo,
             "jobs": status.cmd_jobs, "status": status.cmd_status, "tree": tree.cmd_tree, "next": tree.cmd_next,
             "worktree": worktree.cmd_worktree, "explore": protocol.cmd_explore, "upgrade": protocol.cmd_upgrade,
             "close": protocol.cmd_close,

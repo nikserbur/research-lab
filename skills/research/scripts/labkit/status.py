@@ -85,9 +85,17 @@ def summary(lab: pathlib.Path) -> list:
     lines.append(f"- Rounds: {len(rounds)}" + (f" (latest {rounds[-1]})" if rounds else "")
                  + f"; experiments: {len(rows)} (" + ", ".join(f"{k} {v}" for k, v in sorted(decisions.items())) + ")")
     tests = ledger.find("stats")
+    from .selection import METHODS, fdr_method, method_of
+    methods = " then ".join(dict.fromkeys(method_of(e) for e in tests if not e.get("control"))) \
+        or METHODS[fdr_method(ledger)]
     lines.append(f"- Trials: {trial_count(ledger)} (and {control_count(ledger)} control runs); tested runs: "
-                 f"{len(tests)}; discoveries under LORD++: "
+                 f"{len(tests)}; discoveries under {methods}: "
                  f"{sum(1 for e in tests if e.get('discovery'))}")
+    overfit = ledger.last("pbo")
+    if overfit:
+        lines.append(f"- Probability of backtest overfitting: {overfit['pbo']:.2f} over {len(overfit['runs'])} runs on "
+                     f"{overfit['periods']} periods ({overfit['blocks']} blocks, {overfit['stat']}; "
+                     f"`lab.py pbo`, {overfit['ts'][:10]})")
     best = current_best(ledger)
     stale = False
     if best:

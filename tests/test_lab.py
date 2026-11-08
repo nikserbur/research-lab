@@ -801,7 +801,7 @@ class Protocol(ProtocolCase):
         self.p("register", "E1")
         out = self.series("E1", 0.5, 1)
         self.assertIn("1 trials so far", out)
-        self.assertIn("level 1.52e-02", out)  # the first LORD++ position, not the second
+        self.assertIn("e-LOND level 2.50e-02 (test 1,", out)  # the first position, not the second
         self.assertNotIn("C0", self.p("fdr"))
 
     def test_controls_are_capped_judged_and_never_best(self):
@@ -862,6 +862,91 @@ class Protocol(ProtocolCase):
         self.assertIn("protocol code changed", self.series("E1", 0.5, 1, expect=1))
         self.assertIn("-> ", self.p("upgrade", "--reason", "the deflated Sharpe fix"))
         self.assertIn("E1: exit 0", self.series("E1", 0.5, 1))
+
+    def entries(self, kind):
+        return [e for e in map(json.loads, (self.labdir / "LEDGER.jsonl").read_text().splitlines()) if e["kind"] == kind]
+
+    def test_a_research_tested_under_lord_keeps_it_until_it_takes_e_lond(self):
+        self.p("register", "E1")
+        sys.path.insert(0, str(LAB.parent))
+        from labkit.ledger import Ledger
+        Ledger(self.labdir).append("stats", id="E1", run_seq=0, candidate="c", round="1", p=0.001, sharpe=None,
+                                   dsr=0.0, lord_level=0.0152, discovery=True, control=False, trials=1)  # a 0.12 test
+        self.assertIn("LORD++ level", self.series("E1", 0.5, 1, again=True))
+        self.assertIn("LORD++ assumes independent tests", self.p("fdr"))
+        out = self.p("upgrade", "--reason", "runs share their days", "--e-lond")
+        self.assertIn("from test 3 on; the 2 tests made under LORD++ keep their decisions", out)
+        self.assertIn("(test 3,", self.series("E1", 0.5, 2, again=True))
+        tests = self.entries("stats")
+        self.assertEqual([e.get("fdr") for e in tests], [None, "lord++", "e-lond"])
+        self.assertAlmostEqual(tests[2]["level"], 0.05 / 12 * 3 / (1 + 1 / 2 + 1 / 3))  # both discoveries count
+        self.assertIn("discoveries under LORD++ then e-LOND", self.p("fdr"))
+        self.assertIn("its runs are tested by e-LOND", self.p("upgrade", "--reason", "again", "--e-lond"))
+        self.assertIn("discoveries under LORD++ then e-LOND: 3", self.p("status"))
+
+    def test_a_trial_budget_spreads_the_e_lond_level_evenly(self):
+        self.p("settings", "--max-trials", "40")
+        self.p("register", "E1")
+        self.assertIn("e-LOND level 1.25e-03 (test 1,", self.series("E1", 0.5, 1))
+        self.assertIn("its runs are tested by e-LOND", self.p("upgrade", "--reason", "x", "--e-lond"))
+
+    def test_register_says_how_often_the_criterion_passes_noise_and_a_shrunk_edge(self):
+        self.assertIn("no power report: no run is tested yet", self.p("register", "E1"))
+        self.series("E1", 0.3, 1)
+        self.row("E2", "net_per_trade > 0 & trades >= 30", parent="E1")
+        self.write("research/toy/KB/expect/E2.md", "x")
+        out = self.p("register", "E2", "--dry-run")
+        self.assertIn("E2 can be registered", out)
+        self.assertIn("modelled on E1's run (the parent; 250 periods", out)
+        self.assertIn("net_per_trade is the mean score; trades is the number of periods", out)
+        self.assertIn("WARN  noise passes this criterion 5", out)  # a mean above 0: about half of all noise
+        self.assertEqual([e["id"] for e in self.entries("register")], ["E1"])
+        self.row("E3", "net_per_trade > 0.2 & sharpe_year > 2 & net_stress > 0", parent="E1")
+        self.write("research/toy/KB/expect/E3.md", "x")
+        out = self.p("register", "E3")
+        self.assertNotIn("WARN", out)
+        self.assertIn("sharpe_year is the Sharpe ratio times 15.87", out)
+        self.assertIn("taken to pass (so both rates are upper bounds): net_stress", out)
+        power = self.entries("register")[-1]["power"]
+        self.assertLess(power["null"], 0.01)
+        self.assertGreater(power["shrunk"], 0.6)
+        self.assertLess(power["shrunk_mean"], power["mean"])
+        self.row("E4", "net_per_trade > 0.5 & trades >= 30", parent="E1")
+        self.write("research/toy/KB/expect/E4.md", "x")
+        self.assertIn("an edge of that shrunk size fails it 99% of the time", self.p("register", "E4"))
+        self.control("C0")
+        self.assertNotIn("power", self.p("register", "C0"))
+
+    def test_the_probability_of_backtest_overfitting_of_the_runs(self):
+        self.assertIn("at least two runs", self.p("pbo", expect=1))
+        self.control("C0")
+        self.p("register", "C0")
+        self.series("C0", 0.0, 3)
+        for n, mean in enumerate((0.5, 0.0, 0.05, -0.1), 1):
+            if n > 1:
+                self.row(f"E{n}", "net_per_trade > 0 & trades >= 30")
+                self.write(f"research/toy/KB/expect/E{n}.md", "x")
+            self.p("register", f"E{n}")
+            self.series(f"E{n}", mean, n)
+        self.row("E5", "net_per_trade > 0 & trades >= 30")
+        self.write("research/toy/KB/expect/E5.md", "x")
+        self.p("register", "E5")
+        self.p("run", "E5", "--code", str(SERIES), "--", sys.executable, str(SERIES), str(self.labdir / "results" / "E5"),
+               "0.9", "5", "40")
+        out = self.p("pbo")
+        self.assertIn("PBO over 4 runs (E1, E2, E3, E4) on 250 shared periods: 16 blocks, 12870 splits", out)
+        self.assertIn("probability of backtest overfitting 0.00", out)  # E1's edge is real: best on every half
+        self.assertIn("chosen in sample: E1 100%", out)
+        self.assertIn("pull the slope toward -1", out)
+        self.assertIn("E5 left out: shares 40 periods", out)
+        self.assertIn("recorded already", self.p("pbo"))
+        self.assertIn("8 blocks", self.p("pbo", "--blocks", "8", "--stat", "mean"))
+        self.assertEqual(len(self.entries("pbo")), 2)
+        self.assertIn("C0: it is a control", self.p("pbo", "C0", "E1", expect=1))
+        self.assertIn("--blocks 7", self.p("pbo", "--blocks", "7", expect=1))
+        self.assertIn("Probability of backtest overfitting: 0.00 over 4 runs", self.p("status"))
+        brief = self.write("research/toy/BRIEF.md", f"PBO {self.entries('pbo')[0]['pbo']:.2f} over the four runs.\n")
+        self.assertIn("1 of 1 numbers trace", self.p("brief", brief))
 
     def test_the_candidate_includes_the_command(self):
         self.p("register", "E1")

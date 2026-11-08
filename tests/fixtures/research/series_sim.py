@@ -2,10 +2,12 @@
 
     python3 series_sim.py OUT_DIR MEAN SEED [DAYS]
 
-Writes OUT_DIR/daily.tsv (period, pnl) and OUT_DIR/metrics.tsv (net_per_trade, trades).
+Writes OUT_DIR/daily.tsv (period, pnl) and OUT_DIR/metrics.tsv (net_per_trade, trades, and sharpe_year:
+the mean over the sample standard deviation times the square root of 252).
 """
 import pathlib
 import random
+import statistics
 import sys
 
 out, mean, seed = pathlib.Path(sys.argv[1]), float(sys.argv[2]), int(sys.argv[3])
@@ -14,4 +16,5 @@ rng = random.Random(seed)
 values = [mean + rng.gauss(0, 1) for _ in range(days)]
 out.mkdir(parents=True, exist_ok=True)
 (out / "daily.tsv").write_text("period\tpnl\n" + "".join(f"d{i:03d}\t{v:.6f}\n" for i, v in enumerate(values)))
-(out / "metrics.tsv").write_text(f"net_per_trade\ttrades\n{sum(values) / days:.6f}\t{days}\n")
+sharpe = statistics.fmean(values) / statistics.stdev(values) * 252 ** 0.5
+(out / "metrics.tsv").write_text(f"net_per_trade\ttrades\tsharpe_year\n{sum(values) / days:.6f}\t{days}\t{sharpe:.6f}\n")
