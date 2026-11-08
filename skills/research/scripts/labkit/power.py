@@ -19,6 +19,7 @@ from .selection import block_for, read_series, research_settings, series_file, t
 
 YEARLY = (1, 12, 52, 252, 365)
 UNITS = (1, 100, 10_000)
+MIN_DRAWS, MAX_WORK = 200, 2e7  # resamples, and blocks drawn in all, so a register stays within seconds
 
 
 def reference(ledger: Ledger, parent: str):
@@ -34,8 +35,9 @@ def reference(ledger: Ledger, parent: str):
     return None, None, "no run is tested yet"
 
 
-def close(a: float, b: float, absolute: float = 0.0) -> bool:
-    return abs(a - b) <= 2e-3 * max(abs(a), abs(b)) or abs(a - b) <= absolute
+def close(a: float, b: float) -> bool:
+    """Equal up to how metrics files print numbers (six decimals), so an unrelated metric rarely matches."""
+    return abs(a - b) <= 2e-4 * max(abs(a), abs(b)) or abs(a - b) <= 1e-6
 
 
 def model(value: float, values: list) -> tuple:
@@ -44,7 +46,7 @@ def model(value: float, values: list) -> tuple:
     if value == n:
         return ("periods",)
     for factor in sorted(u * y for u in UNITS for y in YEARLY):
-        if close(value, factor * mean, 1e-6 * factor):
+        if close(value / factor, mean):
             return ("mean", factor)
     for ddof in (0, 1):
         spread = sd * math.sqrt(n / (n - ddof))
@@ -91,7 +93,11 @@ def power(lab, ledger: Ledger, parent: str, clauses: list) -> dict:
                         f"number of periods in {id}'s run ({', '.join(unmodelled)})"}
     n, mean = len(values), stats.moments(values)[0]
     block = block_for(values, settings["block"])
-    draws = stats.resampled_moments([x - mean for x in values], block, max(400, min(2000, int(2e6 * block / n))))
+    if MIN_DRAWS * n / block > MAX_WORK:
+        return {"note": f"no power report: {n} periods in blocks of {block:.1f} are too many to resample at "
+                        "registration"}
+    count = max(MIN_DRAWS, min(2000, int(MAX_WORK / 10 * block / n)))
+    draws = stats.resampled_moments([x - mean for x in values], block, count)
     zs = [stats.NORMAL.inv_cdf(1 - min(max(e["p"], 1e-15), 1 - 1e-15)) for e in ledger.find("stats")
           if e.get("sharpe") is not None and not e.get("control")]
     z = stats.NORMAL.inv_cdf(1 - min(max(test["p"], 1e-15), 1 - 1e-15))
@@ -116,7 +122,8 @@ def lines(report: dict, alpha: float) -> list:
     out = [f"power of this criterion, modelled on {report['reference']}'s run ({report['why']}; {report['periods']} "
            f"periods, block {report['block']:.1f}, {report['draws']} resamples):",
            "  " + "; ".join(report["modelled"].values()),
-           f"  it passes {report['null']:.1%} of runs without an edge, and {report['shrunk']:.1%} of runs whose mean "
+           f"  it passes {report['null']:.1%} (+/- {math.sqrt(report['null'] * (1 - report['null']) / report['draws']):.1%}) "
+           f"of runs without an edge, and {report['shrunk']:.1%} of runs whose mean "
            f"score is {report['reference']}'s {report['mean']:.4g} shrunk to {report['shrunk_mean']:.4g} "
            f"(factor {report['factor']:.2f}, {how})"]
     if report["unmodelled"]:

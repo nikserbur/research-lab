@@ -366,8 +366,8 @@ def pbo(columns: list, blocks: int = 16, stat: str = "sharpe") -> dict:
     periods = len(columns[0])
     if any(len(c) != periods for c in columns):
         raise ValueError("the series must cover the same periods, in the same order")
-    if blocks < 2 or blocks % 2:
-        raise ValueError(f"blocks {blocks}: an even number, at least 2")
+    if blocks < 4 or blocks % 2:
+        raise ValueError(f"blocks {blocks}: an even number, at least 4")
     if periods // blocks < MIN_BLOCK_PERIODS:
         raise ValueError(f"{periods} periods cannot make {blocks} blocks of {MIN_BLOCK_PERIODS} or more")
     edges = [round(i * periods / blocks) for i in range(blocks + 1)]

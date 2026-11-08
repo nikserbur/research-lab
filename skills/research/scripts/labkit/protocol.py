@@ -128,9 +128,9 @@ def cmd_upgrade(a) -> int:
         return fail("upgrade needs --reason: what changed in research-lab and why this research takes it")
     fixed, now = ledger.last("protocol"), protocol_hash()
     from .selection import fdr_method
-    switch = bool(getattr(a, "e_lond", False)) and fdr_method(ledger) != "e-lond"
+    switch = a.e_lond and fdr_method(ledger) != "e-lond"
     if fixed and fixed.get("sha") == now and not switch:
-        print(f"the protocol is {now} already" + ("; its runs are tested by e-LOND" if getattr(a, "e_lond", False) else ""))
+        print(f"the protocol is {now} already" + ("; its runs are tested by e-LOND" if a.e_lond else ""))
         return 0
     ledger.append("protocol", sha=now, previous=(fixed or {}).get("sha", ""), reason=a.reason.strip(),
                   **({"fdr": "e-lond"} if switch else {}))
@@ -270,7 +270,7 @@ def cmd_register(a) -> int:
         return fail(f"parent {parent!r} of {a.id} is not a registered experiment: register the parent first")
     from .power import lines, power
     report = {} if is_control(a.lab, a.id) else power(a.lab, ledger, parent, clauses)
-    if getattr(a, "dry_run", False):
+    if a.dry_run:
         print(f"{a.id} can be registered: {row['pass_criterion']} (nothing recorded)")
     else:
         ledger.append("register", id=a.id, fields={k: row.get(k, "") for k in PRE_RUN},
@@ -745,6 +745,7 @@ def known_numbers(lab: pathlib.Path, ledger: Ledger) -> list:
         values += read_metrics(path).values()
     for e in ledger.entries():
         values += [v for v in (e.get("metrics") or {}).values() if isinstance(v, (int, float))]
+        values += [v for v in (e.get("power") or {}).values() if isinstance(v, (int, float)) and not isinstance(v, bool)]
         if e.get("kind") in ("stats", "compare", "judge", "pbo"):
             values += [v for v in e.values() if isinstance(v, (int, float)) and not isinstance(v, bool)]
     values += [len(ledger.find("run_start")), len(ledger.find("register")), len(ledger.find("holdout_open"))]

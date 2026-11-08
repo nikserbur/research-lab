@@ -447,7 +447,7 @@ def main(argv=None) -> int:
     with_lab(sub, "fdr")
     s = with_lab(sub, "pbo")
     s.add_argument("ids", nargs="*", help="the runs to compare (default: every tested experiment but the controls)")
-    s.add_argument("--blocks", type=int, help="S, even, at most 16 (default: 16, fewer on a short window)")
+    s.add_argument("--blocks", type=int, help="S, even, 4 to 16 (default: 16, fewer on a short window)")
     s.add_argument("--stat", choices=("sharpe", "mean"), default="sharpe")
     with_lab(sub, "jobs")
     with_lab(sub, "status")

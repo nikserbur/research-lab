@@ -463,14 +463,17 @@ def cmd_fdr(a) -> int:
     for group in rounds.values():
         for e, keep in zip(group, stats.benjamini_yekutieli([e["p"] for e in group], alpha)):
             within[e["seq"]] = keep
-    print("id\tround\tp\ttest\tlevel\te-value\tdiscovery\tBY in round")
+    print("id\tround\tp\tmethod\tlevel\te-value\tdiscovery\tBY in round")
     for e in tests:
         print(f"{e['id']}\t{e.get('round', '')}\t{e['p']:.2e}\t{method_of(e)}\t{level_of(e):.2e}\t"
               + (f"{e['e_value']:.3g}" if "e_value" in e else "-")
               + f"\t{'yes' if e['discovery'] else 'no'}\t{'yes' if within[e['seq']] else 'no'}")
     methods = " then ".join(dict.fromkeys(method_of(e) for e in tests))
+    first = next((e["position"] for e in tests if "e_value" in e), None)
     print(f"{len(tests)} tests (one per run), {sum(e['discovery'] for e in tests)} discoveries under {methods} "
           f"at alpha {alpha:g}; each level was fixed when its run ended"
-          + ("; e-LOND holds under any dependence between the runs" if "e-LOND" in methods else
-             "; LORD++ assumes independent tests (`lab.py upgrade --e-lond` for later runs)"))
+          + ("; LORD++ assumes independent tests (`lab.py upgrade --e-lond` for later runs)" if first is None else
+             "; e-LOND holds under any dependence between the runs" if first == 1 else
+             f"; e-LOND's guarantee holds for tests {first} on, under any dependence between the runs; "
+             "the LORD++ tests before assume independence"))
     return 0

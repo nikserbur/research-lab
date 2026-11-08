@@ -242,7 +242,7 @@ class Overfitting(unittest.TestCase):
 
     def test_bad_input(self):
         cols = self.noise(3, 100, 1)
-        for bad in ((cols, 5), (cols, 0), (cols[:1], 4), ([cols[0], cols[1][:90]], 4), (self.noise(3, 30, 1), 16)):
+        for bad in ((cols, 5), (cols, 2), (cols[:1], 4), ([cols[0], cols[1][:90]], 4), (self.noise(3, 30, 1), 16)):
             with self.assertRaises(ValueError):
                 stats.pbo(*bad)
         with self.assertRaises(ValueError):

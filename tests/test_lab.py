@@ -881,6 +881,7 @@ class Protocol(ProtocolCase):
         self.assertEqual([e.get("fdr") for e in tests], [None, "lord++", "e-lond"])
         self.assertAlmostEqual(tests[2]["level"], 0.05 / 12 * 3 / (1 + 1 / 2 + 1 / 3))  # both discoveries count
         self.assertIn("discoveries under LORD++ then e-LOND", self.p("fdr"))
+        self.assertIn("e-LOND's guarantee holds for tests 3 on", self.p("fdr"))
         self.assertIn("its runs are tested by e-LOND", self.p("upgrade", "--reason", "again", "--e-lond"))
         self.assertIn("discoveries under LORD++ then e-LOND: 3", self.p("status"))
 
@@ -943,7 +944,8 @@ class Protocol(ProtocolCase):
         self.assertIn("8 blocks", self.p("pbo", "--blocks", "8", "--stat", "mean"))
         self.assertEqual(len(self.entries("pbo")), 2)
         self.assertIn("C0: it is a control", self.p("pbo", "C0", "E1", expect=1))
-        self.assertIn("--blocks 7", self.p("pbo", "--blocks", "7", expect=1))
+        for blocks in ("7", "2", "0"):
+            self.assertIn(f"--blocks {blocks}", self.p("pbo", "--blocks", blocks, expect=1))
         self.assertIn("Probability of backtest overfitting: 0.00 over 4 runs", self.p("status"))
         brief = self.write("research/toy/BRIEF.md", f"PBO {self.entries('pbo')[0]['pbo']:.2f} over the four runs.\n")
         self.assertIn("1 of 1 numbers trace", self.p("brief", brief))

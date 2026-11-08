@@ -40,7 +40,7 @@ def family(lab, ledger: Ledger, ids: list) -> tuple:
 
 
 def auto_blocks(periods: int) -> int:
-    return max((s for s in range(2, MAX_BLOCKS + 1, 2) if periods // s >= stats.MIN_BLOCK_PERIODS), default=0)
+    return max((s for s in range(4, MAX_BLOCKS + 1, 2) if periods // s >= stats.MIN_BLOCK_PERIODS), default=0)
 
 
 def cmd_pbo(a) -> int:
@@ -71,9 +71,9 @@ def cmd_pbo(a) -> int:
     if len(kept) < 2:
         return fail("the probability of backtest overfitting needs at least two runs with tested series on shared "
                     f"periods; {len(kept)} here" + "".join(f"; {id}: {why}" for id, why in apart))
-    blocks = a.blocks or auto_blocks(len(shared))
-    if blocks < 2 or blocks % 2 or blocks > MAX_BLOCKS or len(shared) // blocks < stats.MIN_BLOCK_PERIODS:
-        return fail(f"--blocks {blocks}: an even number from 2 to {MAX_BLOCKS}, with at least "
+    blocks = a.blocks if a.blocks is not None else auto_blocks(len(shared))
+    if blocks < 4 or blocks % 2 or blocks > MAX_BLOCKS or len(shared) // blocks < stats.MIN_BLOCK_PERIODS:
+        return fail(f"--blocks {blocks}: an even number from 4 to {MAX_BLOCKS}, with at least "
                     f"{stats.MIN_BLOCK_PERIODS} of the {len(shared)} shared periods in each block "
                     f"(at most {auto_blocks(len(shared))} here)")
     members = sorted([id, runs[id][0]["seq"]] for id in kept)
