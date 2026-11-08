@@ -54,10 +54,13 @@ Causes in the protocol, and what changed:
 | `trace` called an outcome stamped when it is known "time going back"; `truncate` compared fills that need the next price | time order per stage; `truncate --stages` |
 | `verify` split wrapped sentences into fragments and let a brief's copy in the KB support itself (0.81 against 0.39) | paragraphs are joined first; the verified text is never its own evidence |
 
-Not done, and why: combinatorial purged cross-validation and the probability of backtest overfitting
-(they need a family of runs over the same splits, a larger change to how runs are defined); e-LOND in
-place of LORD++ (it needs e-values from every test); a power report at registration (it needs a model
-of each metric's distribution).
+Not done in 0.12, and why: combinatorial purged cross-validation and the probability of backtest
+overfitting (they need a family of runs over the same splits, a larger change to how runs are defined);
+e-LOND in place of LORD++ (it needs e-values from every test); a power report at registration (it needs
+a model of each metric's distribution). 0.13.0 added the last three: `lab.py pbo` (CSCV over the runs'
+score series on their shared periods), e-LOND with each run's p-value calibrated into an e-value, and
+the power of the criterion at `register`, resampled from the parent's scores. Combinatorial purged
+cross-validation, several test paths per run, is still not done.
 
 Sources the evaluation leaned on: Bailey and Lopez de Prado (2014) on the deflated Sharpe; Hansen,
 Lunde and Nason (2011) on the model confidence set; Hansen (2005) and Romano and Wolf (2005) on

@@ -124,7 +124,7 @@ the proof in Evidence. An `rl-executor` in mode `prove` runs the commands and re
   self-reported `inputs_ts` is no proof either;
 - S3: `LAB repro --out <file> -- <command>`;
 - S5: the controls (do nothing, a shuffled target, a known case), registered in round `0` and run like
-  any experiment. A round-0 experiment is a control: it spends no trial and no LORD++ position, needs no
+  any experiment. A round-0 experiment is a control: it spends no trial and no test position, needs no
   review, is never BEST or looked at on the holdout, and its decision is `CONTROL`. Its round is fixed
   once it runs, and the research's control runs are capped (`--max-controls`). A do-nothing or shuffled
   control whose p falls below alpha points at a leak or a bug, not at an edge;
@@ -138,14 +138,18 @@ Fix the statistics and the budgets once, before the first run: `LAB settings --l
 <score> --block auto --alpha 0.05 --run-timeout <seconds> --max-trials <N> --max-controls <N>` (the score
 column of `scores.tsv`, such as `pnl` or `cost_saving_pct`, the bootstrap block, the error rate, the
 same time for every run so results compare, the trials the whole research may spend, and the control
-runs, 10 unless set). Two more are fixed now, never after a result: `--scenarios stress` when a result
+runs, 10 unless set). A trial budget also spreads the error rate evenly over the runs it allows; without
+one the first runs get more of it and later runs need ever stronger evidence. Two more are fixed now, never after a result: `--scenarios stress` when a result
 must also hold under stressed assumptions (twice the costs and a borrow fee, a slower fill): the
 simulator then writes those metrics in the same run (`net_bps_day_stress`), and `register` refuses a
 criterion without a clause on them, so the gate is judged by `LAB judge` and at the holdout, never
 typed by hand later; and `--select-by=<metric>` when BEST among statistically equal candidates should
 be chosen by something other than the mean score (`--select-by=-turnover_day`, a stressed Sharpe).
 The first protocol command fixes the version of `lab.py` this research runs on; a research-lab update
-in the middle of it is taken only with `LAB upgrade --lab <folder> --reason <what and why>`. Protect the holdout files as soon as they exist: `LAB holdout --lab <folder> protect <path> ...` records
+in the middle of it is taken only with `LAB upgrade --lab <folder> --reason <what and why>`. A research
+that tested runs under LORD++ (research-lab before 0.13.0) keeps it, since its tests assume independent
+runs; `LAB upgrade --lab <folder> --reason <why> --e-lond` tests its later runs by e-LOND and keeps every
+earlier decision. Protect the holdout files as soon as they exist: `LAB holdout --lab <folder> protect <path> ...` records
 each file's hash and takes every permission from it until the reviewer opens a look. Make the holdout
 before `protect`, keep no other copy, keep it out of git (`protect` refuses a tracked file and warns
 about one `.gitignore` does not list), and tell every subagent its paths as never to be read; a hook
@@ -180,7 +184,11 @@ Write `KB/rounds/R<NN>.md` from the template, one row per hypothesis in its plan
   `net_per_day > 0.05 & days >= 150`, `cost_saving_pct > 1.5 & fill_rate > 0.97 & weeks >= 26`.
   It judges the simulation and later the shorter holdout, so write it in rates (per day, per trade,
   per cycle), not totals that only the long sample can reach, and make it strict enough that noise
-  rarely passes it.
+  rarely passes it. `LAB register --lab <folder> <id> --dry-run` says, without recording anything, how
+  often it passes runs without an edge and runs with the parent's edge shrunk toward zero (resampled
+  from the parent's scores; clauses on the mean score, its Sharpe ratio and the number of periods).
+  Above alpha for noise, tighten it; a real edge of the parent's size failing it most of the time
+  means a criterion the evidence cannot reach. Do this before registering: a registered row is fixed.
 - If several candidates may pass, the choice among them is already fixed: `LAB best` takes every
   eligible one at once, and `--select-by` (settings) decides among those the data cannot tell apart.
   Write in the round file which scenario and metric that is, before the round runs.
@@ -192,7 +200,8 @@ in the round file's "Critique", and add the missing hypotheses it found. Skip on
 
 ## 5. Register and run
 1. `LAB register --lab <folder> <id>`: from now on the row's pre-run cells and `expect/<id>.md` are
-   fixed; `LAB check` reports any edit. A changed experiment gets a new id.
+   fixed; `LAB check` reports any edit. A changed experiment gets a new id. It prints the criterion's
+   power report again and records it.
 2. Agent -> `rl-executor`, mode `run`: the research folder, the id, the LAB command, the run
    arguments, the expected duration, the limits. It runs
    `LAB run --lab <folder> <id> --code <script> --config <file> --data <file> -- <command>`, in the
@@ -219,18 +228,22 @@ prints PASS, FAIL or CRASH with the number of trials so far. Every run was also 
 ended (`LAB stats --lab <folder> <id>` shows the record) on its score per case: the mean over the
 standard deviation (the Sharpe ratio, in trading), deflated against the best that many tries of
 noise would show, a block-bootstrap p-value and interval over the cases, the cases a deflated
-Sharpe of 0.95 would need, and whether the run is a discovery under LORD++, whose level for each run
-is fixed when it ends. A run without a usable `scores.tsv` is a test with
+Sharpe of 0.95 would need, and whether the run is a discovery under e-LOND, whose level for each run
+is fixed when it ends and which holds however the runs depend on each other (they share their days). A run without a usable `scores.tsv` is a test with
 p = 1: untested runs spend the error budget too. Fill the row's result cells with what both printed
 and the artifact paths. A decision (`KEEP` / `DISCARD` / `ITERATE` / `INVALID`, `BEST` for
 the current best) waits for the review: `KEEP` needs the judge's PASS on the latest run and the
 reviewer's PASS for that run, which the reviewer records with `LAB review`. `BEST` is not a cell you set:
 `LAB best --lab <folder>` chooses it once over every candidate with a judge PASS and a reviewer PASS on
-its latest run, a LORD++ discovery and a deflated Sharpe of at least 0.95 against the trials run so far:
+its latest run, an e-LOND discovery and a deflated Sharpe of at least 0.95 against the trials run so far:
 the model confidence set of their scores on shared periods (the ones not significantly worse than the
 best), then the `--select-by` metric within it. A different idea competes with the incumbent on equal
 terms; it does not have to win a chain of pairwise tests. Run it again after each judged batch;
-`holdout open` refuses while candidates changed since. `LAB compare` stays as a diagnostic.
+`holdout open` refuses while candidates changed since. `LAB compare` stays as a diagnostic. Once a
+round has several tested runs, `LAB pbo --lab <folder>` gives the probability of backtest overfitting
+of choosing among them (combinatorially symmetric cross-validation over their scores on shared periods):
+near 0 when the run that is best on half of the periods stays above the median on the other half, near
+0.5 or above when choosing the best was choosing noise, whatever its numbers. It is recorded and goes into the brief.
 `LAB check` refuses a row that claims more than the ledger holds. Negative results are knowledge too.
 
 ## 7. Independent review: expected against actual
@@ -281,7 +294,8 @@ conflicts with the evidence or the next step costs far more than the program all
    not validated. A closed research takes no registration, run, review, selection or look until
    `LAB close --reopen --reason <why>`, which stays in the record.
 3. Write `<folder>/BRIEF_<date>.md`, outside `KB/` (results, the best variant with its deflated
-   Sharpe and interval, the number of trials and discoveries from `LAB fdr`, what is proven and what
+   Sharpe and interval, the number of trials and discoveries from `LAB fdr`, the probability of backtest
+   overfitting from `LAB pbo`, what is proven and what
    is not, next steps). `LAB brief --lab <folder> <brief>` must pass: every
    number traces to a metrics file, the ledger or the program. Then
    `RAG verify --root <folder>/KB --file <brief>` checks claims about earlier knowledge against the KB

@@ -6,6 +6,36 @@ All notable changes to this project are documented here. The format follows
 with every release, or plugin users will not receive the update. Up to 0.3.1 the project was
 called autolearn.
 
+## [0.13.0] - 2026-11-08
+
+What the evaluation of the second end-to-end run left open (docs/e2e-run-2.md, "Not done").
+
+### Changed
+- Online false discovery rate control is e-LOND (Xu and Ramdas, AISTATS 2024) for new researches:
+  each run's p-value is calibrated into an e-value by the paper's Corollary 1, so false discoveries
+  stay below alpha under any dependence between the runs, which share their days (LORD++ assumes
+  independent tests). The discount is even over a declared trial budget (`--max-trials`), else
+  1/(t(t+1)). `stats`, `fdr`, `best` and `status` name the method and show the e-value. It was
+  preferred to LORD++ per idea family (root of the experiment tree): the runs of one family are
+  the most dependent ones, and LORD++ would still assume them independent.
+
+### Added
+- `lab.py pbo [IDS] [--blocks S] [--stat sharpe|mean]`: the probability of backtest overfitting by
+  combinatorially symmetric cross-validation (Bailey, Borwein, Lopez de Prado and Zhu 2017) over
+  the runs' score series on their shared periods (all tested runs but the controls by default; 16
+  blocks, fewer on a short window): PBO, the logit distribution of the in-sample best's rank out of
+  sample, the degradation, and which runs the in-sample choice picks. Recorded once per family,
+  block count and statistic; `status` shows the latest, `brief` traces its numbers.
+- A power report at `lab.py register`, and `register --dry-run` to see it before a row is fixed: how
+  often the criterion passes runs without an edge and runs with the reference run's mean shrunk
+  toward zero (positive-part James-Stein over the research's tests; 1 - 1/z^2 with fewer than three),
+  from stationary block resamples of the reference's scores (the parent's run, else BEST's, else
+  the latest). Clauses on the mean score, its Sharpe ratio (per period or annualised) and the number
+  of periods are modelled; the rest are taken to pass. A WARN when noise passes more often than alpha.
+- `lab.py upgrade --e-lond`: a research that tested runs under LORD++ tests its later runs by e-LOND,
+  from the next position on and counting its earlier discoveries; without it, it keeps LORD++.
+  Recorded decisions never change.
+
 ## [0.12.1] - 2026-11-08
 
 What an independent review of 0.12.0 found.

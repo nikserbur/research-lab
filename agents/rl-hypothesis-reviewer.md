@@ -48,8 +48,9 @@ and trace samples, the processes that are running right now, the resource limits
    short script (done first, see above). If a number does not match, find out why before anything
    else. Say how many trials the research has run and what that does to the best result: read the
    `lab.py stats` record of each run (deflated Sharpe, block-bootstrap interval, periods needed,
-   LORD++ decision) and `lab.py fdr`; a result that is not a discovery is not evidence, however it
-   looks. Check that the research fixed its settings before its first run (`lab.py settings`: the
+   e-LOND decision), `lab.py fdr`, and `lab.py pbo` once several runs are tested (a probability of
+   backtest overfitting near 0.5 or above says choosing the best was choosing noise); a result that is
+   not a discovery is not evidence, however it looks. Check that the research fixed its settings before its first run (`lab.py settings`: the
    score column, the block, alpha, the time budget per run and the trial budget), and read
    `lab.py tree` to see what each experiment changed relative to its parent.
 5. **Expected against actual, stage by stage.** For every row of `expect/<id>.md`: what the system
@@ -81,7 +82,9 @@ and trace samples, the processes that are running right now, the resource limits
 ## Mode "critique": attack the proposed round before it runs
 For every hypothesis in the round file (`RES/rounds/R<NN>.md`): is it already answered in `KNOWLEDGE.md` or a past
 review (cite it)? Is the expected effect large enough to see with the data and the noise level?
-Is the pass criterion fixed before the run and free of test-set tuning? Is the cost honest? Does
+Is the pass criterion fixed before the run and free of test-set tuning, and does
+`lab.py register --lab LAB_DIR <id> --dry-run` show that noise rarely passes it and a real edge of the
+parent's size usually does? Is the cost honest? Does
 it break a user rule? What cheaper test answers the same question? Write
 `RES/reviews/R<NN>_critique.md`: KEEP / CUT / CHANGE per hypothesis with the reason, and the missing
 hypotheses the evidence points to; reply with one line per hypothesis (`H2.3 CHANGE: ...`) so the
